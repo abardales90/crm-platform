@@ -199,3 +199,8 @@ a.btn:hover { text-decoration: none; background: var(--bg); }
 a.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 a.btn.primary:hover { filter: brightness(1.07); background: var(--accent); }
 a.btn.wide { display: block; padding: 10px 12px; }
+
+/* search box in the menu */
+form.gsearch { padding: 0 4px 10px; }
+form.gsearch input { width: 100%; box-sizing: border-box; }
+@media (max-width: 760px) { form.gsearch { order: 5; flex: 1 1 100%; padding: 6px 4px 2px; } }

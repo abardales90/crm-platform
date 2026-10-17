@@ -59,6 +59,13 @@ read the login key on the service's Environment tab. Sign in with your tenant ad
 - Without those two, everything else works and the reply box explains how to turn email on.
 - Database changes now apply on their own when the app starts (see below).
 
+## Version 0.6: tasks, search, spreadsheets
+
+- My tasks page (all your tasks, grouped by due date) and a Home tile for tasks due today or overdue.
+- One search box for accounts, contacts, deals and cases: `GET /v1/search?q=`. It respects permissions and hidden fields.
+- Download CSV on every list.
+- Import CSV for accounts and contacts: `POST /v1/accounts/import` and `POST /v1/contacts/import`. Up to 500 rows, all or nothing, with an option to skip rows that already exist.
+
 ## Automatic database updates
 
 Migrations live in api/migrations. If the environment variable MIGRATE_DATABASE_URL is set, the app applies any new migration files when it starts, each in its own transaction, and stops (leaving the old version running on Render) if one fails.

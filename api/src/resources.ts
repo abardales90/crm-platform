@@ -8,13 +8,14 @@ export type Resource = {
   // columns only the database may set (triggers, counters, timestamps)
   readOnlyCols: string[];
   defaultOwner?: boolean; // owner_user_id falls back to the caller when not sent
+  importable?: boolean;   // gets a bulk import route
 };
 
 const SYSTEM = ['id', 'tenant_id', 'created_at', 'updated_at', 'created_by', 'updated_by', 'deleted_at', 'version'];
 
 export const resources: Resource[] = [
-  { path: 'accounts',      table: 'account',        perm: 'account',      writable: true,  readOnlyCols: [], defaultOwner: true },
-  { path: 'contacts',      table: 'contact',        perm: 'contact',      writable: true,  readOnlyCols: [], defaultOwner: true },
+  { path: 'accounts',      table: 'account',        perm: 'account',      writable: true,  readOnlyCols: [], defaultOwner: true, importable: true },
+  { path: 'contacts',      table: 'contact',        perm: 'contact',      writable: true,  readOnlyCols: [], defaultOwner: true, importable: true },
   { path: 'opportunities', table: 'opportunity',    perm: 'opportunity',  writable: true,  readOnlyCols: ['is_closed', 'is_won'], defaultOwner: true },
   { path: 'cases',         table: 'support_case',   perm: 'case',         writable: true,
     readOnlyCols: ['case_number', 'opened_at', 'first_response_at', 'resolved_at', 'closed_at', 'first_response_due_at', 'resolution_due_at'] },

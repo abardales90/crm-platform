@@ -2,6 +2,17 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.6', date: '2026-10-17', title: 'Tasks, search, and spreadsheets',
+    items: [
+      'My tasks: a new page in the menu that lists every task assigned to you, grouped into overdue, today, later and no due date. Tick the box to mark one done.',
+      'The Home page now shows how many of your tasks are due today or overdue.',
+      'Search everything: the new box at the top of the menu finds accounts, contacts, deals and cases from part of a name, an email, or a case number.',
+      'Download CSV is on every list (accounts, contacts, deals and cases). It saves what you see to a spreadsheet.',
+      'Import CSV on Accounts and Contacts: bring in up to 500 rows at a time from a spreadsheet. Tally shows you a preview and any problems before anything is saved, and you can skip rows that already exist.',
+      'You can now sign in with Google if your admin has turned it on.',
+    ],
+  },
+  {
     id: '0.5', date: '2026-10-17', title: 'Meet Tally',
     items: [
       'The CRM has a name now: Tally.',

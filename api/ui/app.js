@@ -328,9 +328,12 @@ const view = () => $('#view');
 function setView(...nodes) { view().replaceChildren(...nodes.flat(Infinity).filter((n) => n != null && n !== false)); window.scrollTo(0, 0); }
 
 async function viewHome() {
-  const [cases, deals] = await Promise.all([
+  const [cases, deals, myTasks] = await Promise.all([
     can('case', 'read') ? listAll('/cases') : [], can('opportunity', 'read') ? listAll('/opportunities') : [],
+    can('activity', 'read') ? listAll(`/activities?type=task&owner_user_id=${me.user.id}`) : [],
   ]);
+  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
+  const tasksDue = myTasks.filter((t) => !t.completed_at && t.due_at && new Date(t.due_at) <= endOfToday);
   const openCases = cases.filter((c) => !['solved', 'closed'].includes(c.status));
   const breached = openCases.filter((c) => new Date(c.resolution_due_at) < Date.now() || (!c.first_response_at && new Date(c.first_response_due_at) < Date.now()));
   const openDeals = deals.filter((d) => !d.is_closed);
@@ -346,6 +349,7 @@ async function viewHome() {
   setView(
     h('div', { class: 'head' }, h('h1', {}, `Hi ${me.user.display_name.split(' ')[0]}`)),
     h('div', { class: 'stats' },
+      can('activity', 'read') ? stat(tasksDue.length, 'My tasks due today or overdue', '#/tasks') : null,
       can('case', 'read') ? stat(openCases.length, 'Open cases', '#/cases') : null,
       can('case', 'read') ? stat(breached.length, 'Past an SLA target', '#/cases') : null,
       can('opportunity', 'read') ? stat(money(pipeline), `Open pipeline (${money(weighted)} weighted)`, '#/deals') : null,
@@ -391,9 +395,10 @@ async function viewList(key) {
   const rows = await listAll('/' + ent.path);
   const search = h('input', { class: 'search', type: 'search', placeholder: 'Search ' + ent.label.toLowerCase() });
   const body = h('tbody');
+  let shown = rows;
   const draw = () => {
     const q = search.value.toLowerCase();
-    const shown = rows.filter((r) => !q || JSON.stringify(Object.values(r)).toLowerCase().includes(q) || ent.title(r).toLowerCase().includes(q));
+    shown = rows.filter((r) => !q || JSON.stringify(Object.values(r)).toLowerCase().includes(q) || ent.title(r).toLowerCase().includes(q));
     body.replaceChildren(...shown.map((r) => h('tr', { class: 'row', onclick: () => location.hash = `#/${key}/${r.id}` },
       ent.cols.map((c) => h('td', {}, cell(c, r))))));
     count.textContent = `${shown.length} of ${rows.length}`;
@@ -404,7 +409,9 @@ async function viewList(key) {
   search.addEventListener('input', draw);
   setView(
     h('div', { class: 'head' }, h('h1', {}, ent.label),
-      h('div', { class: 'tools' }, count, search, can(ent.perm, 'create') ? h('button', { class: 'primary', onclick: () => openCreate(key) }, 'New ' + ent.one.toLowerCase()) : null)),
+      h('div', { class: 'tools' }, count, search, exportButton(key, () => shown),
+        ['accounts', 'contacts'].includes(key) && can(ent.perm, 'create') ? h('button', { class: 'small', onclick: () => openImport(key) }, 'Import CSV') : null,
+        can(ent.perm, 'create') ? h('button', { class: 'primary', onclick: () => openCreate(key) }, 'New ' + ent.one.toLowerCase()) : null)),
     h('div', { class: 'card tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ent.cols.map((c) => h('th', {}, c[1])))), body), empty));
   draw();
 }
@@ -460,7 +467,7 @@ async function viewDeals() {
   };
   search.addEventListener('input', draw);
   setView(h('div', { class: 'head' }, h('h1', {}, 'Deals'),
-    h('div', { class: 'tools' }, search, can('opportunity', 'create') ? h('button', { class: 'primary', onclick: () => openCreate('deals') }, 'New deal') : null)), board);
+    h('div', { class: 'tools' }, search, exportButton('deals', () => deals), can('opportunity', 'create') ? h('button', { class: 'primary', onclick: () => openCreate('deals') }, 'New deal') : null)), board);
   draw();
 }
 
@@ -1075,16 +1082,253 @@ function gearIcon() {
 }
 
 function renderShell() {
-  const items = [['#/', 'Home', true], ['#/accounts', 'Accounts', can('account', 'read')], ['#/contacts', 'Contacts', can('contact', 'read')],
+  const items = [['#/', 'Home', true], ['#/tasks', 'My tasks', can('activity', 'read')], ['#/accounts', 'Accounts', can('account', 'read')], ['#/contacts', 'Contacts', can('contact', 'read')],
     ['#/deals', 'Deals', can('opportunity', 'read')], ['#/cases', 'Cases', can('case', 'read')],
     ['#/reports', 'Reports', can('case', 'read') || can('opportunity', 'read') || can('account', 'read')]];
   $('#app').replaceChildren(h('div', { class: 'shell' },
     h('nav', { class: 'side' }, h('div', { class: 'brand' }, h('img', { src: 'logo.svg', alt: '', width: 24, height: 24 }), 'Tally'),
+      h('form', { class: 'gsearch', role: 'search', onsubmit: (e) => { e.preventDefault(); const v = e.target.q.value.trim(); if (v) location.hash = '#/search/' + encodeURIComponent(v); } },
+        h('input', { id: 'gsearch', name: 'q', type: 'search', placeholder: 'Search everything', 'aria-label': 'Search everything', autocomplete: 'off', maxlength: 80 })),
       items.filter((i) => i[2]).map(([href, label]) => h('a', { class: 'item', href, 'data-nav': href }, label)),
       h('div', { class: 'bottombar' },
         h('div', { class: 'who' }, h('b', {}, me.user.display_name), h('span', { class: 'muted' }, me.user.email), h('div', {}, h('a', { href: '#', onclick: (e) => { e.preventDefault(); signOut(); } }, 'Sign out'))),
         h('a', { class: 'gear', href: '#/settings', 'data-nav': '#/settings', title: 'Settings', 'aria-label': 'Settings' }, gearIcon()))),
     h('main', {}, h('div', { id: 'view' }))));
+}
+
+// ---------- CSV: export and import ----------
+function parseCsv(text) {
+  text = text.replace(/^﻿/, '');
+  const rows = []; let row = [], f = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else inQ = false; } else f += c; }
+    else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(f); f = ''; rows.push(row); row = []; }
+    else f += c;
+  }
+  if (f !== '' || row.length) { row.push(f); rows.push(row); }
+  return rows.filter((r) => r.some((x) => x.trim() !== ''));
+}
+
+// What a person expects to see in a spreadsheet cell for each kind of field.
+function exportValue(f, r) {
+  const v = r[f.k];
+  switch (f.t) {
+    case 'user': return userName(v);
+    case 'account': return cache.accounts.find((a) => a.id === v)?.name || '';
+    case 'contact': { const c = cache.contacts.find((x) => x.id === v); return c ? ENT.contacts.title(c) : ''; }
+    case 'stage': return stageOf(v)?.name || '';
+    case 'assignee': return r.owner_user_id ? userName(r.owner_user_id) : (cache.queues.find((x) => x.id === r.queue_id)?.name || '');
+    case 'bool': return v ? 'yes' : 'no';
+    case 'select': return v ?? '';
+    default: return v ?? '';
+  }
+}
+function exportList(key, rows) {
+  const ent = ENT[key];
+  const cols = [...ent.fields.map((f) => [f.l, (r) => exportValue(f, r)]), ['Created', (r) => String(r.created_at || '').slice(0, 10)]];
+  const day = new Date().toISOString().slice(0, 10);
+  downloadCsv(`tally-${key}-${day}.csv`, cols, rows);
+}
+const exportButton = (key, getRows) => h('button', { class: 'small', onclick: () => {
+  const rows = getRows();
+  if (!rows.length) return toast('Nothing to download yet', true);
+  exportList(key, rows);
+} }, 'Download CSV');
+
+// Other names people use for the same column in a spreadsheet.
+const IMPORT_ALIASES = {
+  accounts: { name: ['accountname', 'company', 'companyname', 'organization'], domain: ['website domain'], annual_revenue: ['revenue'], number_of_employees: ['employees', 'employeecount', 'size'], description: ['notes', 'note', 'description'], owner_user_id: ['owner', 'accountowner', 'owneremail'] },
+  contacts: { last_name: ['lastname', 'surname', 'last'], first_name: ['firstname', 'first', 'givenname'], email: ['emailaddress', 'mail'], title: ['jobtitle', 'position'], account_id: ['account', 'accountname', 'company', 'companyname'], owner_user_id: ['owner', 'contactowner', 'owneremail'], description: ['notes', 'note'] },
+};
+const normHead = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
+function matchColumns(key, headers) {
+  const ent = ENT[key];
+  const aliases = IMPORT_ALIASES[key] || {};
+  const used = new Set();
+  return headers.map((hd) => {
+    const n = normHead(hd);
+    const f = ent.fields.find((x) => !used.has(x.k) && (normHead(x.k) === n || normHead(x.l) === n || (aliases[x.k] || []).map(normHead).includes(n)));
+    if (f) used.add(f.k);
+    return f || null;
+  });
+}
+// Turns one cell into the value the server expects, or says what is wrong with it.
+function coerceCell(f, raw) {
+  let s = String(raw ?? '').trim();
+  if (s === '') return { skip: true };
+  if (/^'[=+\-@]/.test(s)) s = s.slice(1); // undo the guard our own export adds against spreadsheet formulas
+  switch (f.t) {
+    case 'number': {
+      const n = Number(s.replace(/[$,\s]/g, ''));
+      return Number.isFinite(n) ? { value: n } : { error: `${f.l} must be a number` };
+    }
+    case 'date': {
+      const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s), us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+      const [y, m, d] = iso ? [+iso[1], +iso[2], +iso[3]] : us ? [+us[3], +us[1], +us[2]] : [];
+      const dt = y ? new Date(y, m - 1, d) : null;
+      if (!dt || dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return { error: `${f.l} must be a date like 2026-12-31 or 12/31/2026` };
+      return { value: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}` };
+    }
+    case 'bool': {
+      const v = s.toLowerCase();
+      if (['yes', 'y', 'true', '1'].includes(v)) return { value: true };
+      if (['no', 'n', 'false', '0'].includes(v)) return { value: false };
+      return { error: `${f.l} must be yes or no` };
+    }
+    case 'select': {
+      const v = s.toLowerCase();
+      return f.opts.includes(v) ? { value: v } : { error: `${f.l} must be one of: ${f.opts.join(', ')}` };
+    }
+    case 'user': {
+      const v = s.toLowerCase();
+      const u = cache.users.find((x) => x.email.toLowerCase() === v || x.display_name.toLowerCase() === v);
+      return u ? { value: u.id } : { error: `Owner "${s}" is not a person in Tally. Use their email` };
+    }
+    case 'account': {
+      const a = cache.accounts.find((x) => x.name.toLowerCase() === s.toLowerCase());
+      return a ? { value: a.id } : { error: `Account "${s}" was not found. Import accounts first` };
+    }
+    default:
+      if (f.k === 'email') return { value: s.toLowerCase() };
+      if (f.k === 'domain') return { value: s.toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').replace(/[/?#].*$/, '') };
+      return { value: s };
+  }
+}
+function planImport(key, table) {
+  const ent = ENT[key];
+  const [head, ...data] = table;
+  const map = matchColumns(key, head);
+  const problems = [], rows = [];
+  const mappedKeys = map.filter(Boolean).map((f) => f.k);
+  for (const f of ent.fields.filter((x) => x.req)) if (!mappedKeys.includes(f.k)) problems.push(`There is no "${f.l}" column. It is required`);
+  data.forEach((cells, i) => {
+    const out = {};
+    map.forEach((f, c) => {
+      if (!f) return;
+      const r = coerceCell(f, cells[c]);
+      if (r.error) problems.push(`Row ${i + 2}: ${r.error}`);
+      else if (!r.skip) out[f.k] = r.value;
+    });
+    for (const f of ent.fields.filter((x) => x.req)) if (mappedKeys.includes(f.k) && out[f.k] === undefined && !problems.some((p) => p.startsWith(`Row ${i + 2}:`))) problems.push(`Row ${i + 2}: ${f.l} is empty`);
+    rows.push(out);
+  });
+  return { map, head, rows, problems };
+}
+function openImport(key) {
+  const ent = ENT[key];
+  let plan = null;
+  const info = h('div', { class: 'muted', style: 'margin-top:10px' }, 'Pick a CSV file. The first row must be the column names.');
+  const skip = h('input', { type: 'checkbox' });
+  const file = h('input', { type: 'file', accept: '.csv,text/csv' });
+  const template = h('a', { href: '#', onclick: (e) => { e.preventDefault(); downloadCsv(`tally-${key}-template.csv`, ent.fields.map((f) => [f.l, () => '']), []); } }, 'Download a blank template');
+  file.addEventListener('change', async () => {
+    plan = null;
+    const f = file.files[0];
+    if (!f) return;
+    if (f.size > 2_000_000) { info.replaceChildren('That file is too large. Keep it under 2 MB.'); return; }
+    const table = parseCsv(await f.text());
+    if (table.length < 2) { info.replaceChildren('That file has no rows to import.'); return; }
+    plan = planImport(key, table);
+    const matched = plan.map.map((m, i) => [plan.head[i], m]);
+    info.replaceChildren(
+      h('div', {}, h('b', {}, `${plan.rows.length} row${plan.rows.length === 1 ? '' : 's'}`), plan.rows.length > 500 ? h('span', { class: 'pill bad', style: 'margin-left:8px' }, 'Over 500. Split the file') : null),
+      h('table', { style: 'margin-top:8px' }, h('tbody', {}, matched.map(([col, m]) => h('tr', {}, h('td', {}, col), h('td', { class: 'muted' }, '→'), h('td', {}, m ? m.l : h('span', { class: 'muted' }, 'Ignored (no matching field)')))))),
+      plan.problems.length ? h('div', { class: 'banner', style: 'margin-top:10px' }, h('b', {}, `${plan.problems.length} problem${plan.problems.length === 1 ? '' : 's'} to fix in the file:`),
+        h('ul', { style: 'margin:6px 0 0 18px;padding:0' }, plan.problems.slice(0, 10).map((p) => h('li', {}, p))), plan.problems.length > 10 ? h('div', {}, `and ${plan.problems.length - 10} more`) : null) : h('div', { class: 'pill ok', style: 'margin-top:10px' }, 'Looks good'));
+  });
+  modal(`Import ${ent.label.toLowerCase()} from CSV`, h('div', {}, file, h('div', { style: 'margin-top:6px' }, template),
+    info, h('label', { class: 'inline', style: 'margin-top:12px;gap:8px' }, skip, 'Skip rows that already exist (same ' + (key === 'accounts' ? 'domain' : 'email') + ')')), [
+    { label: 'Cancel' },
+    { label: 'Import', primary: true, run: async (dlg) => {
+      if (!plan) throw new ApiErr(400, { message: 'Choose a CSV file first' });
+      if (plan.problems.length) throw new ApiErr(400, { message: 'Fix the problems listed, then choose the file again' });
+      if (plan.rows.length > 500) throw new ApiErr(400, { message: 'Import up to 500 rows at a time. Split the file in parts' });
+      let res;
+      try { res = await api('POST', `/${ent.path}/import`, { rows: plan.rows, skip_duplicates: skip.checked }); }
+      catch (e) {
+        const list = e.details?.errors;
+        if (list) throw new ApiErr(422, { message: `${e.message}. ` + list.slice(0, 5).map((x) => `Row ${x.row + 1}: ${x.message}`).join('. ') });
+        throw e;
+      }
+      dlg.close();
+      await refreshRef(key);
+      toast(`Imported ${res.created} ${(res.created === 1 ? ent.one : ent.label).toLowerCase()}` + (res.skipped ? `, skipped ${res.skipped} that already existed` : ''));
+      await route();
+    } },
+  ]);
+}
+
+// ---------- my tasks ----------
+const relatedLink = (a, names) => {
+  if (a.case_id) return ['Case', '#/cases/' + a.case_id, names.cases.get(a.case_id)];
+  if (a.opportunity_id) return ['Deal', '#/deals/' + a.opportunity_id, names.deals.get(a.opportunity_id)];
+  if (a.contact_id) { const c = cache.contacts.find((x) => x.id === a.contact_id); return ['Contact', '#/contacts/' + a.contact_id, c ? ENT.contacts.title(c) : '']; }
+  if (a.account_id) return ['Account', '#/accounts/' + a.account_id, cache.accounts.find((x) => x.id === a.account_id)?.name || ''];
+  return null;
+};
+async function viewTasks() {
+  const mine = await listAll(`/activities?type=task&owner_user_id=${me.user.id}`);
+  const names = { cases: new Map(), deals: new Map() };
+  const [cs, ds] = await Promise.all([
+    mine.some((a) => a.case_id) && can('case', 'read') ? listAll('/cases') : [],
+    mine.some((a) => a.opportunity_id) && can('opportunity', 'read') ? listAll('/opportunities') : [],
+  ]);
+  cs.forEach((c) => names.cases.set(c.id, ENT.cases.title(c)));
+  ds.forEach((d) => names.deals.set(d.id, d.name));
+  let showDone = false;
+  const body = h('div');
+  const row = (a) => {
+    const rel = relatedLink(a, names);
+    return h('tr', {},
+      h('td', { style: 'width:28px' }, can('activity', 'edit') ? h('input', { type: 'checkbox', checked: !!a.completed_at, title: a.completed_at ? 'Mark not done' : 'Mark done',
+        onchange: async (e) => {
+          try {
+            const next = await api('PATCH', '/activities/' + a.id, { version: a.version, completed_at: e.target.checked ? new Date().toISOString() : null });
+            mine[mine.findIndex((x) => x.id === a.id)] = next; draw();
+          } catch (err) { toast(errText(err), true); e.target.checked = !e.target.checked; }
+        } }) : null),
+      h('td', { style: a.completed_at ? 'text-decoration:line-through;color:var(--muted)' : '' }, a.subject),
+      h('td', { class: 'muted' }, rel ? h('a', { href: rel[1] }, rel[2] ? `${rel[0]}: ${rel[2]}` : rel[0]) : ''),
+      h('td', {}, a.completed_at ? h('span', { class: 'muted' }, 'done ' + fmtDateTime(a.completed_at)) : a.due_at ? [dueBadge(a.due_at, false), ' ', h('span', { class: 'muted' }, fmtDateTime(a.due_at))] : ''));
+  };
+  const draw = () => {
+    const open = mine.filter((a) => !a.completed_at).sort((a, b) => (a.due_at || '9').localeCompare(b.due_at || '9'));
+    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+    const t1 = new Date(t0); t1.setDate(t1.getDate() + 1);
+    const groups = [['Overdue', open.filter((a) => a.due_at && new Date(a.due_at) < t0)],
+      ['Today', open.filter((a) => a.due_at && new Date(a.due_at) >= t0 && new Date(a.due_at) < t1)],
+      ['Later', open.filter((a) => a.due_at && new Date(a.due_at) >= t1)],
+      ['No due date', open.filter((a) => !a.due_at)]];
+    const done = mine.filter((a) => a.completed_at).sort((a, b) => b.completed_at.localeCompare(a.completed_at)).slice(0, 30);
+    const section = (title, list) => list.length ? h('div', { class: 'card tablewrap', style: 'margin-bottom:14px' },
+      h('div', { style: 'padding:14px 16px 4px' }, h('h2', {}, `${title} (${list.length})`)), h('table', {}, h('tbody', {}, list.map(row)))) : null;
+    body.replaceChildren(...[
+      ...groups.map(([t, l]) => section(t, l)),
+      open.length ? null : h('div', { class: 'card empty' }, mine.length ? 'You are all caught up.' : 'No tasks yet. Open any account, contact, deal or case, pick Task under Activity, and add one.'),
+      showDone ? section('Done recently', done) : null].filter(Boolean));
+  };
+  const toggle = h('input', { type: 'checkbox', onchange: (e) => { showDone = e.target.checked; draw(); } });
+  setView(h('div', { class: 'head' }, h('h1', {}, 'My tasks'), h('label', { class: 'inline', style: 'gap:8px' }, toggle, 'Show done')), body);
+  draw();
+}
+
+// ---------- search ----------
+const SEARCH_LABEL = { accounts: 'Accounts', contacts: 'Contacts', deals: 'Deals', cases: 'Cases' };
+async function viewSearch(enc) {
+  const qText = decodeURIComponent(enc || '').trim();
+  const box = document.querySelector('#gsearch');
+  if (box) box.value = qText;
+  if (qText.length < 2) return setView(h('div', { class: 'head' }, h('h1', {}, 'Search')), h('div', { class: 'card empty' }, 'Type at least two letters in the search box.'));
+  const res = await api('GET', '/search?q=' + encodeURIComponent(qText));
+  setView(h('div', { class: 'head' }, h('h1', {}, `Results for "${qText}"`)),
+    res.groups.length ? res.groups.map((g) => h('div', { class: 'card tablewrap', style: 'margin-bottom:14px' },
+      h('div', { style: 'padding:14px 16px 4px' }, h('h2', {}, SEARCH_LABEL[g.key] || g.key)),
+      h('table', {}, h('tbody', {}, g.rows.map((r) => h('tr', { class: 'row', onclick: () => location.hash = `#/${g.href}/${r.id}` },
+        h('td', {}, r.title), h('td', { class: 'muted' }, r.sub ? (g.key === 'cases' ? cap(r.sub) : r.sub) : '')))))))
+      : h('div', { class: 'card empty' }, `Nothing found for "${qText}".`));
 }
 
 async function route() {
@@ -1098,6 +1342,8 @@ async function route() {
     if (section === '') await viewHome();
     else if (section === 'reports') await viewReports(id);
     else if (section === 'settings') await viewSettings(id);
+    else if (section === 'tasks') await viewTasks();
+    else if (section === 'search') await viewSearch(id);
     else if (section === 'deals' && !id) await viewDeals();
     else if (ENT[section] && !id) await viewList(section);
     else if (ENT[section]) await viewDetail(section, id);

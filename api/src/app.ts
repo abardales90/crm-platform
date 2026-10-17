@@ -11,6 +11,7 @@ import { settingsRoutes } from './settings.js';
 import { caseMailRoutes } from './mail.js';
 import { prefRoutes } from './prefs.js';
 import { googleRoutes, type GoogleConfig } from './google.js';
+import { searchRoutes } from './search.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const q = (c: string) => `"${c}"`; // column names only ever come from the schema whitelist
@@ -140,6 +141,7 @@ export function buildApp(opts: {
   settingsRoutes(app, kit, opts.email, { google: !!opts.google, key: !!opts.sandboxLogin });
   caseMailRoutes(app, kit, opts.email);
   prefRoutes(app, kit);
+  searchRoutes(app, kit);
 
   for (const res of resources) {
     const base = `/v1/${res.path}`;
@@ -206,6 +208,49 @@ export function buildApp(opts: {
       });
       return reply.status(201).send(row);
     });
+
+    // Bulk import, up to 500 rows. All or nothing: if any row has a problem, nothing is saved and every problem is listed.
+    if (res.importable) {
+      const WHY: Record<string, string> = { account_domain_uq: 'an account with the same domain already exists', contact_email_uq: 'a contact with the same email already exists' };
+      app.post(`${base}/import`, async (req, reply) => {
+        const out = await authed(req, async (db, userId) => {
+          await can(db, userId, res.perm, 'create');
+          const body: any = req.body;
+          const rows = body?.rows;
+          if (!Array.isArray(rows) || rows.length === 0) throw new ApiError(400, 'bad_request', 'Send rows as a list with at least one row');
+          if (rows.length > 500) throw new ApiError(400, 'too_many_rows', 'Import up to 500 rows at a time. Split the file and import it in parts');
+          const skipDuplicates = body.skip_duplicates === true;
+          const cols = await columnsOf(db, res.table);
+          const acc = await accessMap(db, userId, res, cols);
+          const tenantId = (await db.query(`SELECT current_tenant_id() AS t`)).rows[0].t;
+          const errors: { row: number; message: string }[] = [];
+          let created = 0, skipped = 0;
+          for (let i = 0; i < rows.length; i++) {
+            await db.query('SAVEPOINT imp_row');
+            try {
+              const fields = checkBody(rows[i], res, cols, acc, 'create');
+              if (res.defaultOwner && fields.owner_user_id === undefined) fields.owner_user_id = userId;
+              const keys = Object.keys(fields);
+              const names = ['tenant_id', ...keys].map(q).join(', ');
+              const marks = ['$1', ...keys.map((_, k) => `$${k + 2}`)].join(', ');
+              await db.query(`INSERT INTO ${q(res.table)} (${names}) VALUES (${marks})`, [tenantId, ...keys.map((k) => fields[k])]);
+              await db.query('RELEASE SAVEPOINT imp_row');
+              created++;
+            } catch (e) {
+              await db.query('ROLLBACK TO SAVEPOINT imp_row');
+              const m = e instanceof ApiError ? e : fromPg(e);
+              if (!m) throw e;
+              if (m.code === 'duplicate' && skipDuplicates) { skipped++; continue; }
+              const constraint = (m.details as any)?.constraint as string | undefined;
+              errors.push({ row: i + 1, message: m.code === 'duplicate' ? (WHY[constraint ?? ''] ?? m.message) : m.code === 'rule_violation' ? `a value breaks a rule${constraint ? ` (${constraint})` : ''}` : m.message });
+            }
+          }
+          if (errors.length) throw new ApiError(422, 'import_failed', `${errors.length} row${errors.length === 1 ? ' has' : 's have'} a problem. Nothing was imported`, { errors: errors.slice(0, 50), total_errors: errors.length });
+          return { created, skipped };
+        });
+        return reply.status(201).send(out);
+      });
+    }
 
     app.patch(`${base}/:id`, async (req) =>
       authed(req, async (db, userId) => {
