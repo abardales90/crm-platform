@@ -69,6 +69,98 @@ describe('search', () => {
   });
 });
 
+describe('search: inside notes, previews and labels', () => {
+  let acct: any, caseId: string;
+  const find = (q: string, who = A(), extra = '') => w.call('GET', `/v1/search?q=${encodeURIComponent(q)}${extra}`, who);
+  const group = (r: any, key: string) => r.body.groups.find((g: any) => g.key === key);
+
+  beforeAll(async () => {
+    acct = (await w.call('POST', '/v1/accounts', A(), { name: 'Stark Industries', description: 'Big renewal talks. The champion is Pepper Potts and she wants onboarding help before March.' })).body;
+    const tony = (await w.call('POST', '/v1/contacts', A(), { first_name: 'Tony', last_name: 'Stark', email: 'tony@stark.test', account_id: acct.id, description: 'Secret handshake word is zanzibar' })).body;
+    const queue = (await w.call('GET', '/v1/queues', A())).body.data[0].id;
+    const c = (await w.call('POST', '/v1/cases', A(), { subject: 'Login trouble', description: 'Tony Camillo cannot log in since the update went out on Tuesday.', queue_id: queue, priority: 'high', contact_id: tony.id })).body;
+    caseId = c.id;
+    await w.call('POST', '/v1/case-comments', A(), { case_id: c.id, body: 'Asked Camillo to clear the browser cache', is_public: false, author_user_id: w.tenants.a.users.admin });
+    await w.call('POST', '/v1/activities', A(), { type: 'task', subject: 'Call Camillo back', body: 'Offer a screen share', case_id: c.id });
+  }, 60_000);
+
+  it('finds a case from words inside its description and shows where the match is', async () => {
+    const r = await find('Camillo');
+    const row = group(r, 'cases').rows[0];
+    expect(row.id).toBe(caseId);
+    expect(row.matched).toBe('Description');
+    expect(row.snippet).toContain('Tony Camillo cannot log in');
+    // the contact Tony Stark does not contain Camillo anywhere
+    expect(group(r, 'contacts')).toBeUndefined();
+  });
+
+  it('needs every word, in any order, and can find one person by first and last name', async () => {
+    expect(group(await find('Tony Camillo'), 'cases')).toBeTruthy();
+    expect(group(await find('Tony Camillo'), 'contacts')).toBeUndefined();
+    expect(group(await find('stark tony'), 'contacts').rows[0].title).toBe('Tony Stark');
+    expect((await find('Tony Nobody')).body.groups).toEqual([]);
+  });
+
+  it('shows a short preview of notes on accounts and contacts, with the match inside it', async () => {
+    const a = group(await find('Pepper'), 'accounts').rows[0];
+    expect(a).toMatchObject({ title: 'Stark Industries', matched: 'Notes' });
+    expect(a.snippet).toContain('Pepper Potts');
+    expect(a.snippet.length).toBeLessThan(200);
+    expect(group(await find('zanzibar'), 'contacts').rows[0].matched).toBe('Notes');
+  });
+
+  it('finds tasks and case replies and points at the record they belong to', async () => {
+    const r = await find('Camillo');
+    const task = group(r, 'activities').rows[0];
+    expect(task).toMatchObject({ title: 'Call Camillo back', href: 'cases', id: caseId, sub: 'task' });
+    const reply = group(r, 'replies').rows[0];
+    expect(reply).toMatchObject({ href: 'cases', id: caseId, matched: 'Message' });
+    expect(reply.title).toMatch(/^Reply on case #\d+$/);
+    expect(group(await find('screen share'), 'activities').rows[0].matched).toBe('Details');
+  });
+
+  it('can limit the kinds searched and the number of rows', async () => {
+    const r = await find('Camillo', A(), '&types=cases,replies');
+    expect(r.body.groups.map((g: any) => g.key).sort()).toEqual(['cases', 'replies']);
+    for (let i = 0; i < 4; i++) await w.call('POST', '/v1/accounts', A(), { name: `Limit Test ${i}` });
+    expect(group(await find('Limit Test', A(), '&limit=2'), 'accounts').rows).toHaveLength(2);
+  });
+
+  it('puts a heading match first and hides fields the person may not see', async () => {
+    const rows = group(await find('stark'), 'accounts').rows;
+    expect(rows[0].title).toBe('Stark Industries');
+    await w.sql(`INSERT INTO field_permission (tenant_id, role_id, object, field, access) VALUES ($1, $2, 'contact', 'description', 'none')`, [w.tenants.a.id, w.tenants.a.roles['Support Agent']]);
+    const me = (await w.call('GET', '/v1/me', A('agent'))).body.permissions;
+    expect(me.contact).toContain('read');
+    expect(group(await find('zanzibar', A('agent')), 'contacts')).toBeUndefined();
+    expect(group(await find('zanzibar'), 'contacts')).toBeTruthy();
+  });
+});
+
+describe('menu preferences', () => {
+  const put = (b: unknown, who = A()) => w.call('PUT', '/v1/me/preferences', who, b);
+  it('starts with the standard menu, saves an order and the collapsed state, and can reset', async () => {
+    const first = (await w.call('GET', '/v1/me/preferences', A('sales'))).body;
+    expect(first.nav_order).toBeNull();
+    expect(first.nav_collapsed).toBe(false);
+    const r = await put({ nav_order: ['cases', 'home', 'accounts'], nav_collapsed: true }, A('sales'));
+    expect(r.body).toMatchObject({ nav_order: ['cases', 'home', 'accounts'], nav_collapsed: true });
+    expect((await w.call('GET', '/v1/me/preferences', A('sales'))).body.nav_order).toEqual(['cases', 'home', 'accounts']);
+    expect((await put({ nav_order: null }, A('sales'))).body.nav_order).toBeNull();
+  });
+  it('is saved per person and per company', async () => {
+    await put({ nav_order: ['reports', 'home'] }, A('agent'));
+    expect((await w.call('GET', '/v1/me/preferences', A('finance'))).body.nav_order).toBeNull();
+    expect((await w.call('GET', '/v1/me/preferences', B('agent'))).body.nav_order).toBeNull();
+  });
+  it('refuses a bad order', async () => {
+    for (const bad of [[], ['home', 'home'], ['Home'], ['home', 'a b'], ['<script>'], 'home', Array.from({ length: 13 }, (_, i) => 'x' + String.fromCharCode(97 + i)), [1, 2]]) {
+      expect((await put({ nav_order: bad })).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect((await put({ nav_collapsed: 'yes' })).status).toBe(400);
+  });
+});
+
 describe('bulk import', () => {
   const imp = (path: string, body: unknown, who = A()) => w.call('POST', `/v1/${path}/import`, who, body);
 

@@ -464,6 +464,17 @@ BEGIN
     DELETE FROM user_preference WHERE id = v_id;
     RAISE EXCEPTION 'FAIL: 22d app role deleted a preference row';
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS: 22d app role cannot delete preference rows'; END;
+  UPDATE user_preference SET nav_order = ARRAY['home','cases','accounts'], nav_collapsed = true WHERE id = v_id;
+  IF (SELECT nav_collapsed FROM user_preference WHERE id = v_id) THEN RAISE NOTICE 'PASS: 22f menu order and collapsed state saved';
+  ELSE RAISE EXCEPTION 'FAIL: 22f menu preference not saved'; END IF;
+  BEGIN
+    UPDATE user_preference SET nav_order = ARRAY['home','<script>'] WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: 22g odd menu item name accepted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS: 22g odd menu item name rejected'; END;
+  BEGIN
+    UPDATE user_preference SET nav_order = ARRAY[]::text[] WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: 22h empty menu order accepted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS: 22h empty menu order rejected'; END;
   PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'b_tenant'), false);
   SELECT count(*) INTO v_n FROM user_preference;
   IF v_n = 0 THEN RAISE NOTICE 'PASS: 22e other tenant cannot see the preference row';

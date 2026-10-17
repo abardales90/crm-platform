@@ -361,7 +361,7 @@ describe('reports', () => {
 describe('my preferences', () => {
   it('start empty, then remember a color, the tour and the last update seen', async () => {
     const first = await w.call('GET', '/v1/me/preferences', A('sales'));
-    expect(first.body).toEqual({ accent: null, tour_done_at: null, last_seen_release: null });
+    expect(first.body).toEqual({ accent: null, tour_done_at: null, last_seen_release: null, nav_order: null, nav_collapsed: false });
     expect((await w.call('PUT', '/v1/me/preferences', A('sales'), { accent: 'purple' })).body.accent).toBe('purple');
     const done = await w.call('PUT', '/v1/me/preferences', A('sales'), { tour_done: true, last_seen_release: '0.4' });
     expect(done.status).toBe(200);

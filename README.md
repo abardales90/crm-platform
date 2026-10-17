@@ -66,6 +66,13 @@ read the login key on the service's Environment tab. Sign in with your tenant ad
 - Download CSV on every list.
 - Import CSV for accounts and contacts: `POST /v1/accounts/import` and `POST /v1/contacts/import`. Up to 500 rows, all or nothing, with an option to skip rows that already exist.
 
+## Version 0.7: top search, icons, menu you can arrange
+
+- Search sits in a top bar. `GET /v1/search?q=&limit=&types=` looks inside names, notes, case descriptions, tasks and case replies. Every word must match. Each hit says what it is and shows a short preview.
+- Each kind of record has its own icon. The left menu collapses to icons and can be rearranged by dragging, with Alt and the arrow keys, or in Settings, Left menu.
+- Menu order and collapsed state are saved per person (migration 0011: `nav_order`, `nav_collapsed` on `user_preference`).
+- The Tally logo and the browser tab icon follow the chosen accent color.
+
 ## Automatic database updates
 
 Migrations live in api/migrations. If the environment variable MIGRATE_DATABASE_URL is set, the app applies any new migration files when it starts, each in its own transaction, and stops (leaving the old version running on Render) if one fails.

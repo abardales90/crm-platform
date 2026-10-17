@@ -2,6 +2,18 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.7', date: '2026-10-17', title: 'Search at the top, icons, and a menu you can arrange',
+    items: [
+      'Search now sits at the top of every page. It looks inside case descriptions, notes, tasks and replies, not only names, and shows a short preview of the words that matched.',
+      'Every result says what it is (account, contact, deal, case, task or reply) and has its own icon. Use the buttons under the search box to look at just one kind.',
+      'Press the / key any time to jump to the search box.',
+      'Each page has its own icon, in the menu and in its title.',
+      'Collapse the left menu down to icons with the button at the top of it. Press it again to open it up.',
+      'Rearrange the menu by dragging items, or use Settings, Left menu. Your order and your choice to collapse are saved to your account.',
+      'The Tally logo now takes the color you pick, and so does the little icon on your browser tab.',
+    ],
+  },
+  {
     id: '0.6', date: '2026-10-17', title: 'Tasks, search, and spreadsheets',
     items: [
       'My tasks: a new page in the menu that lists every task assigned to you, grouped into overdue, today, later and no due date. Tick the box to mark one done.',

@@ -10,7 +10,20 @@ const cache = { users: [], stages: [], queues: [], accounts: [], contacts: [], w
 // ---------- theme: match the device, or force light or dark ----------
 const THEME_KEY = 'crm_theme';
 function getTheme() { try { return localStorage.getItem(THEME_KEY) || 'system'; } catch { return 'system'; } }
-function applyTheme(t) { if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; }
+function applyTheme(t) { if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; updateFavicon(); }
+// The little icon on the browser tab uses the same color as the Tally mark in the menu.
+function updateFavicon() {
+  try {
+    const cs = getComputedStyle(document.documentElement);
+    const ok = (v, d) => /^#[0-9a-f]{3,8}$/i.test(v) ? v : d;
+    const bg = ok(cs.getPropertyValue('--accent').trim(), '#2f6f5e'), fg = ok(cs.getPropertyValue('--accent-ink').trim(), '#ffffff');
+    const markup = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="${bg}"/><g fill="${fg}"><rect x="15" y="14" width="34" height="11" rx="4"/><rect x="26.5" y="14" width="11" height="22" rx="4"/><circle cx="32" cy="47" r="5.5"/></g></svg>`;
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.append(link); }
+    link.type = 'image/svg+xml'; link.href = 'data:image/svg+xml,' + encodeURIComponent(markup);
+  } catch { /* the tab icon is only a nicety */ }
+}
+try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateFavicon); } catch { /* old browser */ }
 function setTheme(t) { try { localStorage.setItem(THEME_KEY, t); } catch { /* private window: the choice lasts until reload */ } applyTheme(t); }
 applyTheme(getTheme());
 
@@ -20,6 +33,7 @@ const ACCENTS = [['green', 'Green'], ['blue', 'Blue'], ['purple', 'Purple'], ['o
 function applyAccent(a) {
   if (a && a !== 'green' && ACCENTS.some((x) => x[0] === a)) document.documentElement.dataset.accent = a; else delete document.documentElement.dataset.accent;
   try { localStorage.setItem(ACCENT_KEY, a || 'green'); } catch { /* private window */ }
+  updateFavicon();
 }
 let prefs = { accent: null, tour_done_at: null, last_seen_release: null };
 async function savePrefs(change) { prefs = await api('PUT', '/me/preferences', change); return prefs; }
@@ -408,7 +422,7 @@ async function viewList(key) {
   const empty = h('div', { class: 'empty' }, rows.length ? 'Nothing matches.' : `No ${ent.label.toLowerCase()} yet.`);
   search.addEventListener('input', draw);
   setView(
-    h('div', { class: 'head' }, h('h1', {}, ent.label),
+    h('div', { class: 'head' }, titled(key, ent.label),
       h('div', { class: 'tools' }, count, search, exportButton(key, () => shown),
         ['accounts', 'contacts'].includes(key) && can(ent.perm, 'create') ? h('button', { class: 'small', onclick: () => openImport(key) }, 'Import CSV') : null,
         can(ent.perm, 'create') ? h('button', { class: 'primary', onclick: () => openCreate(key) }, 'New ' + ent.one.toLowerCase()) : null)),
@@ -466,7 +480,7 @@ async function viewDeals() {
     }));
   };
   search.addEventListener('input', draw);
-  setView(h('div', { class: 'head' }, h('h1', {}, 'Deals'),
+  setView(h('div', { class: 'head' }, titled('deals', 'Deals'),
     h('div', { class: 'tools' }, search, exportButton('deals', () => deals), can('opportunity', 'create') ? h('button', { class: 'primary', onclick: () => openCreate('deals') }, 'New deal') : null)), board);
   draw();
 }
@@ -540,7 +554,7 @@ async function viewDetail(key, id) {
 
   const heading = h('div', { class: 'head' }, h('div', {},
     h('div', { class: 'crumb' }, h('a', { href: '#/' + key }, ent.label)),
-    h('h1', {}, ent.title(rec))),
+    titled(key, ent.title(rec))),
     key === 'cases' ? h('div', { class: 'inline' },
       ['solved', 'closed'].includes(rec.status)
         ? (editable ? h('button', { onclick: () => quickStatus('open') }, 'Reopen') : null)
@@ -833,7 +847,7 @@ async function viewReports(tabKey) {
     catch (e) { if (e.status === 401) return; body.replaceChildren(h('div', { class: 'banner' }, errText(e))); }
   }
   setView(
-    h('div', { class: 'head' }, h('h1', {}, 'Reports'), h('div', { class: 'tools' }, tab[4] ? range : null)),
+    h('div', { class: 'head' }, titled('reports', 'Reports'), h('div', { class: 'tools' }, tab[4] ? range : null)),
     h('div', { class: 'tabs' }, tabs.map((t) => h('a', { class: 'tab' + (t === tab ? ' on' : ''), href: '#/reports/' + t[0] }, t[1]))),
     body);
   await draw();
@@ -871,6 +885,20 @@ async function viewSettings(tabKey) {
       h('label', { class: 'swatch' }, h('input', { type: 'radio', name: 'accent', value: v, checked: v === (prefs.accent || 'green'),
         onchange: async () => { applyAccent(v); try { await savePrefs({ accent: v }); } catch (e) { toast(errText(e), true); } } }),
         h('i', { class: 'sw-' + v }), l))))));
+
+  // left menu order
+  const menuList = h('div', { class: 'menuedit' });
+  const drawMenu = () => {
+    const list = navVisible();
+    fill(menuList, list.map((n, i) => h('div', { class: 'menurow' }, icon(n.icon, 18), h('span', { class: 'grow' }, n.label),
+      h('button', { class: 'small', disabled: i === 0, 'aria-label': `Move ${n.label} up`, onclick: () => { moveNav(n.key, -1); drawMenu(); } }, 'Up'),
+      h('button', { class: 'small', disabled: i === list.length - 1, 'aria-label': `Move ${n.label} down`, onclick: () => { moveNav(n.key, 1); drawMenu(); } }, 'Down'))));
+  };
+  drawMenu();
+  parts.push(card('Left menu', h('div', {},
+    h('p', { class: 'muted', style: 'margin:0 0 10px' }, 'Put the pages you use most at the top. You can also drag items in the menu itself, or focus one and press Alt with the up or down arrow. The arrow button at the top of the menu collapses it to icons.'),
+    menuList,
+    h('div', { class: 'actions' }, h('button', { onclick: async () => { prefs = { ...prefs, nav_order: null }; drawNavList(); drawMenu(); try { await savePrefs({ nav_order: null }); } catch (e) { toast(errText(e), true); } } }, 'Back to the standard order')))));
 
   // welcome tour
   parts.push(card('Welcome tour', h('div', { class: 'inline' },
@@ -1067,13 +1095,13 @@ async function renderLogin(msg) {
   // Built only when needed: an element can sit in one place, and err is shared by whichever card is shown.
   const nothing = () => h('div', { class: 'card' }, h('h1', { style: 'margin-bottom:12px' }, 'Sign in'), err, h('p', { class: 'muted', style: 'margin:0' }, 'No way to sign in is turned on for this server yet.'));
   $('#app').replaceChildren(h('div', { class: 'login' },
-    h('div', { class: 'brand', style: 'padding-left:0' }, h('img', { src: 'logo.svg', alt: '', width: 24, height: 24 }), 'Tally'),
+    h('div', { class: 'brand', style: 'padding-left:0' }, logoMark(26), 'Tally'),
     cfg.google ? googleCard() : null,
     cfg.google && cfg.key ? h('details', { style: 'margin-top:12px' }, h('summary', { class: 'muted' }, 'Use the shared access key instead'), h('div', { style: 'margin-top:8px' }, keyForm)) : null,
     !cfg.google && cfg.key ? keyForm : null,
     !cfg.google && !cfg.key ? nothing() : null));
 }
-function signOut() { token = ''; me = null; prefs = { accent: null, tour_done_at: null, last_seen_release: null }; localStorage.removeItem(TOKEN_KEY); renderLogin(); }
+function signOut() { token = ''; me = null; prefs = { accent: null, tour_done_at: null, last_seen_release: null, nav_order: null, nav_collapsed: false }; localStorage.removeItem(TOKEN_KEY); renderLogin(); }
 
 function gearIcon() {
   return svg('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' },
@@ -1081,20 +1109,6 @@ function gearIcon() {
     svg('path', { d: 'M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z' }));
 }
 
-function renderShell() {
-  const items = [['#/', 'Home', true], ['#/tasks', 'My tasks', can('activity', 'read')], ['#/accounts', 'Accounts', can('account', 'read')], ['#/contacts', 'Contacts', can('contact', 'read')],
-    ['#/deals', 'Deals', can('opportunity', 'read')], ['#/cases', 'Cases', can('case', 'read')],
-    ['#/reports', 'Reports', can('case', 'read') || can('opportunity', 'read') || can('account', 'read')]];
-  $('#app').replaceChildren(h('div', { class: 'shell' },
-    h('nav', { class: 'side' }, h('div', { class: 'brand' }, h('img', { src: 'logo.svg', alt: '', width: 24, height: 24 }), 'Tally'),
-      h('form', { class: 'gsearch', role: 'search', onsubmit: (e) => { e.preventDefault(); const v = e.target.q.value.trim(); if (v) location.hash = '#/search/' + encodeURIComponent(v); } },
-        h('input', { id: 'gsearch', name: 'q', type: 'search', placeholder: 'Search everything', 'aria-label': 'Search everything', autocomplete: 'off', maxlength: 80 })),
-      items.filter((i) => i[2]).map(([href, label]) => h('a', { class: 'item', href, 'data-nav': href }, label)),
-      h('div', { class: 'bottombar' },
-        h('div', { class: 'who' }, h('b', {}, me.user.display_name), h('span', { class: 'muted' }, me.user.email), h('div', {}, h('a', { href: '#', onclick: (e) => { e.preventDefault(); signOut(); } }, 'Sign out'))),
-        h('a', { class: 'gear', href: '#/settings', 'data-nav': '#/settings', title: 'Settings', 'aria-label': 'Settings' }, gearIcon()))),
-    h('main', {}, h('div', { id: 'view' }))));
-}
 
 // ---------- CSV: export and import ----------
 function parseCsv(text) {
@@ -1311,24 +1325,266 @@ async function viewTasks() {
       showDone ? section('Done recently', done) : null].filter(Boolean));
   };
   const toggle = h('input', { type: 'checkbox', onchange: (e) => { showDone = e.target.checked; draw(); } });
-  setView(h('div', { class: 'head' }, h('h1', {}, 'My tasks'), h('label', { class: 'inline', style: 'gap:8px' }, toggle, 'Show done')), body);
+  setView(h('div', { class: 'head' }, titled('tasks', 'My tasks'), h('label', { class: 'inline', style: 'gap:8px' }, toggle, 'Show done')), body);
   draw();
 }
 
-// ---------- search ----------
-const SEARCH_LABEL = { accounts: 'Accounts', contacts: 'Contacts', deals: 'Deals', cases: 'Cases' };
+// ---------- icons: a small set drawn for Tally, one for each kind of record ----------
+const ICONS = {
+  home: [['path', { d: 'M4 11l8-7 8 7' }], ['path', { d: 'M6 10v9a1 1 0 0 0 1 1h3.5v-5h3v5H17a1 1 0 0 0 1-1v-9' }]],
+  tasks: [['rect', { x: 4, y: 4, width: 16, height: 16, rx: 4 }], ['path', { d: 'M8.5 12.5l2.5 2.5 4.5-5.5' }]],
+  accounts: [['path', { d: 'M5 20V6a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v14' }], ['path', { d: 'M15 10h3a1 1 0 0 1 1 1v9' }], ['path', { d: 'M3 20h18' }], ['path', { d: 'M8.5 9h3M8.5 12.5h3M8.5 16h3' }]],
+  contacts: [['circle', { cx: 12, cy: 8.5, r: 3.5 }], ['path', { d: 'M5 20c.6-3.6 3.4-5.5 7-5.5s6.4 1.9 7 5.5' }]],
+  deals: [['path', { d: 'M3.5 4.5h8l9 9a1.5 1.5 0 0 1 0 2.1l-5 5a1.5 1.5 0 0 1-2.1 0L3.5 10.7z' }], ['circle', { cx: 8, cy: 9, r: 1.3 }]],
+  cases: [['circle', { cx: 12, cy: 12, r: 8.5 }], ['circle', { cx: 12, cy: 12, r: 3.5 }], ['path', { d: 'M6 6l3.5 3.5M18 6l-3.5 3.5M6 18l3.5-3.5M18 18l-3.5-3.5' }]],
+  reports: [['path', { d: 'M4 4v16h16' }], ['rect', { x: 8, y: 11, width: 3, height: 6, rx: .8 }], ['rect', { x: 13.5, y: 7, width: 3, height: 10, rx: .8 }]],
+  note: [['path', { d: 'M6.5 3.5H15l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19V5a1.5 1.5 0 0 1 1.5-1.5z' }], ['path', { d: 'M15 3.5V8h4' }], ['path', { d: 'M8.5 12.5h7M8.5 16h5' }]],
+  chat: [['path', { d: 'M5 5h14a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 19 17h-8l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5v-9A1.5 1.5 0 0 1 5 5z' }]],
+  search: [['circle', { cx: 11, cy: 11, r: 6.5 }], ['path', { d: 'M16 16l4 4' }]],
+  panel: [['rect', { x: 3.5, y: 4.5, width: 17, height: 15, rx: 2.5 }], ['path', { d: 'M9.5 4.5v15' }]],
+  logout: [['path', { d: 'M9 4H6.5A1.5 1.5 0 0 0 5 5.5v13A1.5 1.5 0 0 0 6.5 20H9' }], ['path', { d: 'M14 8l4 4-4 4M18 12H9' }]],
+  grip: [['circle', { cx: 9, cy: 7, r: 1.2 }], ['circle', { cx: 15, cy: 7, r: 1.2 }], ['circle', { cx: 9, cy: 12, r: 1.2 }], ['circle', { cx: 15, cy: 12, r: 1.2 }], ['circle', { cx: 9, cy: 17, r: 1.2 }], ['circle', { cx: 15, cy: 17, r: 1.2 }]],
+};
+// replaceChildren does not flatten lists, so every list of nodes goes through here.
+const fill = (el, ...nodes) => el.replaceChildren(...nodes.flat(Infinity).filter((n) => n != null && n !== false));
+function icon(name, size = 18) {
+  return svg('svg', { viewBox: '0 0 24 24', width: size, height: size, fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', class: 'ico' },
+    (ICONS[name] || []).map(([t, a]) => svg(t, a)));
+}
+const titled = (name, text) => h('h1', { class: 'titled' }, icon(name, 22), text);
+
+// The Tally mark takes the person's color, so it changes when they pick a new one.
+function logoMark(size = 24) {
+  return svg('svg', { viewBox: '0 0 64 64', width: size, height: size, class: 'logo', role: 'img', 'aria-label': 'Tally' },
+    svg('rect', { class: 'lg-bg', width: 64, height: 64, rx: 14 }),
+    svg('g', { class: 'lg-fg' }, svg('rect', { x: 15, y: 14, width: 34, height: 11, rx: 4 }), svg('rect', { x: 26.5, y: 14, width: 11, height: 22, rx: 4 }), svg('circle', { cx: 32, cy: 47, r: 5.5 })));
+}
+
+// ---------- left menu: order and collapsed state belong to each person ----------
+const NAV = [
+  { key: 'home', href: '#/', label: 'Home', icon: 'home', show: () => true },
+  { key: 'tasks', href: '#/tasks', label: 'My tasks', icon: 'tasks', show: () => can('activity', 'read') },
+  { key: 'accounts', href: '#/accounts', label: 'Accounts', icon: 'accounts', show: () => can('account', 'read') },
+  { key: 'contacts', href: '#/contacts', label: 'Contacts', icon: 'contacts', show: () => can('contact', 'read') },
+  { key: 'deals', href: '#/deals', label: 'Deals', icon: 'deals', show: () => can('opportunity', 'read') },
+  { key: 'cases', href: '#/cases', label: 'Cases', icon: 'cases', show: () => can('case', 'read') },
+  { key: 'reports', href: '#/reports', label: 'Reports', icon: 'reports', show: () => can('case', 'read') || can('opportunity', 'read') || can('account', 'read') },
+];
+function navOrdered() {
+  const saved = Array.isArray(prefs.nav_order) ? prefs.nav_order : [];
+  const rank = (k) => { const i = saved.indexOf(k); return i < 0 ? 1000 + NAV.findIndex((n) => n.key === k) : i; };
+  return [...NAV].sort((a, b) => rank(a.key) - rank(b.key));
+}
+const navVisible = () => navOrdered().filter((n) => n.show());
+let navCollapsed = false;
+function setCollapsed(v, save = true) {
+  navCollapsed = v;
+  document.querySelector('.shell')?.classList.toggle('collapsed', v);
+  const b = $('#navtoggle');
+  if (b) { b.title = v ? 'Expand menu' : 'Collapse menu'; b.setAttribute('aria-label', b.title); b.setAttribute('aria-expanded', String(!v)); }
+  try { localStorage.setItem('crm_nav_collapsed', v ? '1' : '0'); } catch { /* private window */ }
+  if (save) savePrefs({ nav_collapsed: v }).catch(() => {});
+}
+function markNav() {
+  const section = (location.hash || '#/').split('/')[1] || '';
+  document.querySelectorAll('[data-nav]').forEach((n) => n.classList.toggle('on', n.dataset.nav === '#/' + section || (section === '' && n.dataset.nav === '#/')));
+}
+function saveNavOrder(keys) {
+  prefs = { ...prefs, nav_order: keys };
+  drawNavList();
+  savePrefs({ nav_order: keys }).catch((e) => toast(errText(e), true));
+}
+function moveNav(key, delta) {
+  const keys = navVisible().map((n) => n.key);
+  const i = keys.indexOf(key), j = i + delta;
+  if (i < 0 || j < 0 || j >= keys.length) return false;
+  [keys[i], keys[j]] = [keys[j], keys[i]];
+  saveNavOrder(keys);
+  return true;
+}
+function dropNav(dragKey, targetKey, after) {
+  const keys = navVisible().map((n) => n.key).filter((k) => k !== dragKey);
+  const t = keys.indexOf(targetKey);
+  if (t < 0 || dragKey === targetKey) return;
+  keys.splice(after ? t + 1 : t, 0, dragKey);
+  saveNavOrder(keys);
+}
+function navItem(n) {
+  const a = h('a', { class: 'item', href: n.href, 'data-nav': n.href, 'data-key': n.key, title: n.label, draggable: 'true' },
+    icon(n.icon, 18), h('span', { class: 'lbl' }, n.label), h('span', { class: 'grip', 'aria-hidden': 'true' }, icon('grip', 14)));
+  a.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', n.key); e.dataTransfer.effectAllowed = 'move'; a.classList.add('dragging'); });
+  a.addEventListener('dragend', () => { a.classList.remove('dragging'); document.querySelectorAll('.drop-before,.drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after')); });
+  a.addEventListener('dragover', (e) => {
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+    const r = a.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+    a.classList.toggle('drop-after', after); a.classList.toggle('drop-before', !after);
+  });
+  a.addEventListener('dragleave', () => a.classList.remove('drop-before', 'drop-after'));
+  a.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const r = a.getBoundingClientRect();
+    a.classList.remove('drop-before', 'drop-after');
+    dropNav(e.dataTransfer.getData('text/plain'), n.key, e.clientY > r.top + r.height / 2);
+  });
+  // Keyboard: Alt plus the up or down arrow moves the focused item.
+  a.addEventListener('keydown', (e) => {
+    if (!e.altKey || !['ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    e.preventDefault();
+    if (moveNav(n.key, e.key === 'ArrowUp' ? -1 : 1)) document.querySelector(`.navlist a[data-key="${n.key}"]`)?.focus();
+  });
+  return a;
+}
+function drawNavList() {
+  const list = $('.navlist');
+  if (!list) return;
+  fill(list, navVisible().map(navItem));
+  markNav();
+}
+
+// ---------- search: one box at the top, with a live results panel ----------
+const SEARCH_TYPES = {
+  accounts: { one: 'Account', many: 'Accounts', icon: 'accounts', perm: 'account', hint: 'Names, websites and notes' },
+  contacts: { one: 'Contact', many: 'Contacts', icon: 'contacts', perm: 'contact', hint: 'Names, emails, titles and notes' },
+  deals: { one: 'Deal', many: 'Deals', icon: 'deals', perm: 'opportunity', hint: 'Names, next steps and notes' },
+  cases: { one: 'Case', many: 'Cases', icon: 'cases', perm: 'case', hint: 'Subjects, descriptions and case numbers' },
+  activities: { one: 'Activity', many: 'Tasks and notes', icon: 'note', perm: 'activity', hint: 'Tasks, calls, meetings and notes' },
+  replies: { one: 'Case reply', many: 'Case replies', icon: 'chat', perm: 'case_comment', hint: 'Messages written on cases' },
+};
+const searchTypes = () => Object.entries(SEARCH_TYPES).filter(([, t]) => can(t.perm, 'read'));
+function highlight(text, terms) {
+  const t = [...terms].filter(Boolean).sort((a, b) => b.length - a.length).map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!t.length) return [String(text)];
+  return String(text).split(new RegExp('(' + t.join('|') + ')', 'ig')).map((part, i) => i % 2 ? h('mark', {}, part) : part);
+}
+function resultRow(key, r, terms) {
+  const T = SEARCH_TYPES[key];
+  const isAct = key === 'activities';
+  const label = isAct ? cap(r.sub || 'activity') : T.one;
+  const ico = isAct && r.sub === 'task' ? 'tasks' : T.icon;
+  const side = [];
+  if (r.sub_kind === 'status' && r.sub) side.push(h('span', { class: 'pill ' + (['solved', 'closed'].includes(r.sub) ? 'ok' : r.sub === 'escalated' ? 'bad' : '') }, cap(r.sub)));
+  if (r.sub_kind === 'money' && r.sub != null) side.push(h('span', { class: 'muted' }, money(r.sub)));
+  return h('a', { class: 'sr', href: `#/${r.href}/${r.id}`, role: 'option' },
+    h('span', { class: 'sr-ico' }, icon(ico, 18)),
+    h('span', { class: 'sr-main' },
+      h('span', { class: 'sr-title' }, ...highlight(r.title, terms), r.sub_kind === 'plain' && r.sub && !isAct ? h('span', { class: 'sr-sub' }, ...highlight(r.sub, terms)) : null),
+      r.snippet ? h('span', { class: 'sr-snip' }, h('b', {}, r.matched + ': '), ...highlight(r.snippet, terms)) : null),
+    h('span', { class: 'sr-side' }, side, h('span', { class: 'tag' }, label)));
+}
+function groupBlock(g, terms) {
+  const T = SEARCH_TYPES[g.key];
+  return h('div', { class: 'sg' }, h('div', { class: 'sg-head' }, icon(T.icon, 15), T.many), g.rows.map((r) => resultRow(g.key, r, terms)));
+}
+
+function buildSearch() {
+  const input = h('input', { id: 'gsearch', type: 'search', placeholder: 'Search accounts, contacts, deals, cases and notes', autocomplete: 'off', maxlength: 80,
+    role: 'combobox', 'aria-expanded': 'false', 'aria-controls': 'gpanel', 'aria-label': 'Search everything' });
+  const panel = h('div', { id: 'gpanel', class: 'sresults', role: 'listbox', hidden: true });
+  let scope = null, seq = 0, timer = null, active = -1, stale = false;
+  const rows = () => [...panel.querySelectorAll('a.sr')];
+  const open = () => { panel.hidden = false; input.setAttribute('aria-expanded', 'true'); };
+  const close = () => { panel.hidden = true; input.setAttribute('aria-expanded', 'false'); active = -1; };
+  const setActive = (i) => {
+    const list = rows();
+    if (!list.length) return;
+    active = (i + list.length) % list.length;
+    list.forEach((r, k) => { r.classList.toggle('active', k === active); r.setAttribute('aria-selected', String(k === active)); });
+    list[active].scrollIntoView({ block: 'nearest' });
+  };
+  const chips = (counts) => h('div', { class: 'schips', role: 'group', 'aria-label': 'Search only in' },
+    h('button', { type: 'button', class: 'chip' + (scope ? '' : ' on'), 'aria-pressed': String(!scope), onclick: () => { scope = null; run(true); } }, 'All'),
+    searchTypes().map(([k, t]) => h('button', { type: 'button', class: 'chip' + (scope === k ? ' on' : ''), 'aria-pressed': String(scope === k), onclick: () => { scope = scope === k ? null : k; run(true); } },
+      icon(t.icon, 14), t.many, counts?.[k] ? h('i', {}, counts[k]) : null)));
+  const help = () => fill(panel, chips(),
+    h('div', { class: 'shelp' }, h('p', {}, 'Type at least two letters. Try a name, an email, a case number like #12, or any words from a note or description.'),
+      h('div', { class: 'shelp-list' }, searchTypes().map(([k, t]) => h('div', {}, icon(t.icon, 16), h('b', {}, t.many), h('span', { class: 'muted' }, t.hint))))));
+  async function run(immediate) {
+    clearTimeout(timer);
+    const q = input.value.trim().replace(/\s+/g, ' ');
+    open();
+    if (q.length < 2) { seq++; stale = false; panel.classList.remove('stale'); return help(); }
+    // Until the new answer arrives, the old rows are dimmed and cannot be picked by mistake.
+    stale = true; active = -1; panel.classList.add('stale');
+    const mine = ++seq; // from this moment any older answer that arrives late is thrown away
+    const go = async () => {
+      try {
+        const res = await api('GET', `/search?q=${encodeURIComponent(q)}&limit=5${scope ? '&types=' + scope : ''}`);
+        if (mine !== seq) return;
+        const counts = Object.fromEntries(res.groups.map((g) => [g.key, g.rows.length]));
+        fill(panel, chips(counts),
+          res.groups.length ? res.groups.map((g) => groupBlock(g, res.terms)) : h('div', { class: 'shelp' }, h('p', {}, `Nothing found for "${q}".`), h('p', { class: 'muted' }, 'Try fewer words, or check the spelling.')),
+          h('a', { class: 'sr-all', href: '#/search/' + encodeURIComponent(q) }, `See all results for "${q}"`));
+        active = -1; stale = false; panel.classList.remove('stale');
+      } catch (e) { if (mine === seq && e.status !== 401) fill(panel, h('div', { class: 'shelp' }, h('p', {}, errText(e)))); }
+    };
+    if (immediate) go(); else timer = setTimeout(go, 180);
+  }
+  input.addEventListener('input', () => run(false));
+  input.addEventListener('focus', () => { if (panel.hidden || !panel.children.length) run(true); else open(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); open(); if (!stale) setActive(active + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (!stale) setActive(active - 1); }
+    else if (e.key === 'Escape') { if (!panel.hidden) { close(); e.preventDefault(); } else input.blur(); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      const list = rows();
+      if (!stale && active >= 0 && list[active]) { const href = list[active].getAttribute('href'); input.value = ''; close(); input.blur(); location.hash = href; return; }
+      const q = input.value.trim();
+      if (q.length >= 2) { close(); location.hash = '#/search/' + encodeURIComponent(q); }
+    }
+  });
+  panel.addEventListener('click', (e) => { if (e.target.closest('a')) { input.value = ''; close(); } });
+  const box = h('form', { class: 'searchbox', role: 'search', onsubmit: (e) => e.preventDefault() }, h('span', { class: 'si' }, icon('search', 18)), input, h('kbd', { class: 'kbd', title: 'Press / to search' }, '/'), panel);
+  box.closePanel = close;
+  return box;
+}
+// One listener each for the whole page: click away closes the panel, "/" and Ctrl or Cmd plus K jump to the box.
+document.addEventListener('mousedown', (e) => { const b = document.querySelector('.searchbox'); if (b && !b.contains(e.target)) b.closePanel?.(); });
+document.addEventListener('keydown', (e) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
+  if (document.querySelector('dialog[open]') || !document.querySelector('#gsearch')) return;
+  if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) { e.preventDefault(); $('#gsearch').focus(); $('#gsearch').select(); }
+});
+
+// The full results page: the same rows as the panel, with more of them.
 async function viewSearch(enc) {
   const qText = decodeURIComponent(enc || '').trim();
-  const box = document.querySelector('#gsearch');
+  const box = $('#gsearch');
   if (box) box.value = qText;
-  if (qText.length < 2) return setView(h('div', { class: 'head' }, h('h1', {}, 'Search')), h('div', { class: 'card empty' }, 'Type at least two letters in the search box.'));
-  const res = await api('GET', '/search?q=' + encodeURIComponent(qText));
-  setView(h('div', { class: 'head' }, h('h1', {}, `Results for "${qText}"`)),
-    res.groups.length ? res.groups.map((g) => h('div', { class: 'card tablewrap', style: 'margin-bottom:14px' },
-      h('div', { style: 'padding:14px 16px 4px' }, h('h2', {}, SEARCH_LABEL[g.key] || g.key)),
-      h('table', {}, h('tbody', {}, g.rows.map((r) => h('tr', { class: 'row', onclick: () => location.hash = `#/${g.href}/${r.id}` },
-        h('td', {}, r.title), h('td', { class: 'muted' }, r.sub ? (g.key === 'cases' ? cap(r.sub) : r.sub) : '')))))))
-      : h('div', { class: 'card empty' }, `Nothing found for "${qText}".`));
+  if (qText.length < 2) return setView(h('div', { class: 'head' }, titled('search', 'Search')), h('div', { class: 'card empty' }, 'Type at least two letters in the search box at the top.'));
+  const res = await api('GET', '/search?q=' + encodeURIComponent(qText) + '&limit=20');
+  let scope = null;
+  const out = h('div');
+  const draw = () => {
+    const shown = res.groups.filter((g) => !scope || g.key === scope);
+    fill(out,
+      h('div', { class: 'schips page' },
+        h('button', { type: 'button', class: 'chip' + (scope ? '' : ' on'), onclick: () => { scope = null; draw(); } }, 'All'),
+        res.groups.map((g) => h('button', { type: 'button', class: 'chip' + (scope === g.key ? ' on' : ''), onclick: () => { scope = g.key; draw(); } }, icon(SEARCH_TYPES[g.key].icon, 14), SEARCH_TYPES[g.key].many, h('i', {}, g.rows.length)))),
+      shown.length ? shown.map((g) => h('div', { class: 'card sresults-page' }, groupBlock(g, res.terms))) : h('div', { class: 'card empty' }, `Nothing found for "${qText}". Try fewer words, or check the spelling.`));
+  };
+  setView(h('div', { class: 'head' }, titled('search', `Results for "${qText}"`)), out);
+  draw();
+}
+
+function signOutIcon() { return icon('logout', 18); }
+function renderShell() {
+  navCollapsed = prefs.nav_collapsed === true || (prefs.nav_collapsed === undefined && (() => { try { return localStorage.getItem('crm_nav_collapsed') === '1'; } catch { return false; } })());
+  $('#app').replaceChildren(h('div', { class: 'shell' + (navCollapsed ? ' collapsed' : '') },
+    h('nav', { class: 'side', 'aria-label': 'Main menu' },
+      h('div', { class: 'navtop' },
+        h('div', { class: 'brand' }, logoMark(26), h('span', { class: 'lbl' }, 'Tally')),
+        h('button', { id: 'navtoggle', class: 'iconbtn', type: 'button', onclick: () => setCollapsed(!navCollapsed) }, icon('panel', 18))),
+      h('div', { class: 'navlist' }),
+      h('div', { class: 'bottombar' },
+        h('div', { class: 'who' }, h('b', {}, me.user.display_name), h('span', { class: 'muted' }, me.user.email), h('div', {}, h('a', { href: '#', onclick: (e) => { e.preventDefault(); signOut(); } }, 'Sign out'))),
+        h('a', { class: 'gear', href: '#/settings', 'data-nav': '#/settings', title: 'Settings', 'aria-label': 'Settings' }, gearIcon()),
+        h('button', { class: 'iconbtn signout', type: 'button', title: 'Sign out', 'aria-label': 'Sign out', onclick: signOut }, signOutIcon()))),
+    h('div', { class: 'mainwrap' },
+      h('header', { class: 'topbar' }, buildSearch()),
+      h('main', {}, h('div', { id: 'view' })))));
+  drawNavList();
+  setCollapsed(navCollapsed, false);
 }
 
 async function route() {
@@ -1336,7 +1592,8 @@ async function route() {
   routeSeq++;
   const [, a, id] = (location.hash || '#/').split('/');
   const section = a || '';
-  document.querySelectorAll('[data-nav]').forEach((n) => n.classList.toggle('on', n.dataset.nav === '#/' + section || (section === '' && n.dataset.nav === '#/')));
+  markNav();
+  document.querySelector('.searchbox')?.closePanel?.();
   try {
     setView(h('div', { class: 'muted' }, 'Loading…'));
     if (section === '') await viewHome();
