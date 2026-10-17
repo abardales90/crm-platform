@@ -2,6 +2,15 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.9', date: '2026-10-17', title: 'Choose where each column goes when you import',
+    items: [
+      'Import CSV now shows every column in your file next to the field it will go into. Change any of them, or set a column to Ignore.',
+      'Your custom fields are in the list too, so a spreadsheet from SFDC can land in them.',
+      'Admins can pick Create a custom field for a column that has no home yet. Tally guesses the kind (number, date, yes or no, or text) from what is in the column and tells you before it creates anything.',
+      'If two columns are going into the same field, Tally says so and waits for you to fix it.',
+    ],
+  },
+  {
     id: '0.8', date: '2026-10-17', title: 'Your own fields, saved views, and a clearer task list',
     items: [
       'Custom fields: in Settings, Custom fields, add your own fields to accounts, contacts, deals and cases. Pick text, long text, number, date, yes or no, or a list of choices. You can mark one as required.',

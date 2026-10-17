@@ -96,3 +96,7 @@ Only people already listed under Settings, People can sign in. Google proves who
 - Saved views (migration 0013): `saved_view` holds named filters per person, optionally shared with the workspace. Filters are applied on the screen to the rows already loaded.
 - My tasks and the Home count now include calls, meetings and emails that have a due date. Column headings were added.
 - Screen files are served with `Cache-Control: no-cache` plus an ETag, so a new release shows on the next visit.
+
+## Version 0.9
+
+- CSV import has a column mapping step: each column of the file is shown with the field it will fill (standard or custom), and can be changed or ignored. Admins can create a custom field from a column, with the kind guessed from its values. Two columns cannot fill the same field.

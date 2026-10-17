@@ -1446,13 +1446,34 @@ function coerceCell(f, raw) {
       return { value: s };
   }
 }
-function planImport(key, table) {
+// Same rule the server uses to turn a field name into its key.
+const fieldKey = (label) => label.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').replace(/^[0-9]+/, '').slice(0, 40);
+// Looks at what is in a column and guesses the kind of custom field it should become.
+function guessKind(values) {
+  const v = values.map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (!v.length) return 'text';
+  if (v.every((x) => /^[-+]?[\d,]*\.?\d+$/.test(x.replace(/^\$/, '')) && Number.isFinite(Number(x.replace(/[$,]/g, ''))))) return 'number';
+  if (v.every((x) => coerceCell({ t: 'date', l: '' }, x).value)) return 'date';
+  if (v.every((x) => ['yes', 'no', 'true', 'false', 'y', 'n'].includes(x.toLowerCase()))) return 'checkbox';
+  return v.some((x) => x.length > 250) ? 'long text' : 'text';
+}
+// The field a column would become if the person chooses "Create a custom field".
+function newFieldFor(header, values) {
+  const label = String(header).trim().slice(0, 60), k = fieldKey(label);
+  if (!label || !k) return null;
+  const kind = guessKind(values);
+  return { k: 'custom.' + k, cf: k, l: label, t: KIND_T[kind], newField: { label, kind } };
+}
+// map: one chosen field (or null for "ignore") for each column of the file.
+function planImport(key, table, map) {
   const ent = ENT[key];
   const [head, ...data] = table;
-  const map = matchColumns(key, head);
+  map = map || matchColumns(key, head);
   const problems = [], rows = [];
   const mappedKeys = map.filter(Boolean).map((f) => f.k);
-  for (const f of ent.fields.filter((x) => x.req)) if (!mappedKeys.includes(f.k)) problems.push(`There is no "${f.l}" column. It is required`);
+  const seen = new Set();
+  for (const f of map.filter(Boolean)) { if (seen.has(f.k)) problems.push(`Two columns are going into "${f.l}". Pick one of them and set the other to ignore`); seen.add(f.k); }
+  for (const f of ent.fields.filter((x) => x.req)) if (!mappedKeys.includes(f.k)) problems.push(`No column is going into "${f.l}". It is required`);
   data.forEach((cells, i) => {
     const out = {};
     map.forEach((f, c) => {
@@ -1464,42 +1485,87 @@ function planImport(key, table) {
     for (const f of ent.fields.filter((x) => x.req)) if (mappedKeys.includes(f.k) && (f.cf ? out.custom?.[f.cf] : out[f.k]) === undefined && !problems.some((p) => p.startsWith(`Row ${i + 2}:`))) problems.push(`Row ${i + 2}: ${f.l} is empty`);
     rows.push(out);
   });
-  return { map, head, rows, problems };
+  return { map, head, rows, problems, table };
 }
 function openImport(key) {
   const ent = ENT[key];
   let plan = null;
+  const canMakeFields = can('app_user', 'edit');
   const info = h('div', { class: 'muted', style: 'margin-top:10px' }, 'Pick a CSV file. The first row must be the column names.');
   const skip = h('input', { type: 'checkbox' });
   const file = h('input', { type: 'file', accept: '.csv,text/csv' });
   const template = h('a', { href: '#', onclick: (e) => { e.preventDefault(); downloadCsv(`tally-${key}-template.csv`, ent.fields.map((f) => [f.l, () => '']), []); } }, 'Download a blank template');
+  const mapBox = h('div', { class: 'mapbox', hidden: true });
+  const result = h('div');
+  let choices = [];        // what the person picked for each column: a field, a "new" field, or null
+  let table = null;
+
+  const replan = () => { plan = planImport(key, table, choices.map((c) => c)); drawResult(); };
+  const drawResult = () => {
+    const mappedCount = plan.map.filter(Boolean).length;
+    fill(result, [
+      h('div', { style: 'margin-top:10px' }, h('b', {}, `${plan.rows.length} row${plan.rows.length === 1 ? '' : 's'}`), h('span', { class: 'muted' }, `, ${mappedCount} of ${plan.head.length} columns will be imported`),
+        plan.rows.length > 500 ? h('span', { class: 'pill bad', style: 'margin-left:8px' }, 'Over 500. Split the file') : null),
+      plan.map.some((m) => m?.newField) ? h('div', { class: 'muted', style: 'margin-top:6px' }, `New custom fields will be created: ${[...new Set(plan.map.filter((m) => m?.newField).map((m) => `${m.l} (${kindLabels[m.newField.kind]})`))].join(', ')}. A field's kind cannot be changed later.`) : null,
+      plan.problems.length ? h('div', { class: 'banner', style: 'margin-top:10px' }, h('b', {}, `${plan.problems.length} problem${plan.problems.length === 1 ? '' : 's'} to fix:`),
+        h('ul', { style: 'margin:6px 0 0 18px;padding:0' }, plan.problems.slice(0, 10).map((p) => h('li', {}, p))), plan.problems.length > 10 ? h('div', {}, `and ${plan.problems.length - 10} more`) : null)
+        : mappedCount ? h('div', { class: 'pill ok', style: 'margin-top:10px' }, 'Looks good') : h('div', { class: 'banner', style: 'margin-top:10px' }, 'No column is matched to a field yet. Choose where each column should go.')]);
+  };
+  const drawMap = () => {
+    const [head, ...data] = table;
+    const std = ent.fields.filter((f) => !f.cf), cust = ent.fields.filter((f) => f.cf);
+    const usedByOther = (i, k) => choices.some((c, j) => j !== i && c && c.k === k);
+    fill(mapBox, [h('div', { class: 'muted', style: 'margin-bottom:6px' }, 'Each column from your file goes into one field. Change any that look wrong, or set a column to Ignore.'),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Column in your file'), h('th', {}, 'Example'), h('th', {}, 'Goes into'))),
+        h('tbody', {}, head.map((hd, i) => {
+          const example = (data.find((r) => String(r[i] ?? '').trim()) || [])[i] ?? '';
+          const nf = canMakeFields && !ent.fields.some((f) => f.k === 'custom.' + fieldKey(String(hd).trim().slice(0, 60))) ? newFieldFor(hd, data.map((r) => r[i])) : null;
+          const sl = h('select', {}, h('option', { value: '' }, 'Ignore this column'),
+            h('optgroup', { label: 'Standard fields' }, std.map((f) => h('option', { value: f.k }, f.l + (f.req ? ' *' : '')))),
+            cust.length ? h('optgroup', { label: 'Custom fields' }, cust.map((f) => h('option', { value: f.k }, f.l + (f.req ? ' *' : '')))) : null,
+            nf ? h('optgroup', { label: 'New' }, h('option', { value: '__new' }, `Create a custom field "${nf.l}" (${kindLabels[nf.newField.kind]})`)) : null);
+          const cur = choices[i];
+          sl.value = cur ? (cur.newField ? '__new' : cur.k) : '';
+          sl.addEventListener('change', () => {
+            choices[i] = sl.value === '' ? null : sl.value === '__new' ? nf : ent.fields.find((f) => f.k === sl.value);
+            replan(); drawMap();
+          });
+          const clash = cur && !cur.newField && usedByOther(i, cur.k);
+          return h('tr', {}, h('td', {}, hd), h('td', { class: 'muted' }, String(example).slice(0, 30)), h('td', {}, sl, clash ? h('span', { class: 'pill bad', style: 'margin-left:6px' }, 'Used twice') : null));
+        })))]);
+    mapBox.hidden = false;
+  };
   file.addEventListener('change', async () => {
-    plan = null;
+    plan = null; mapBox.hidden = true; fill(result, []);
     const f = file.files[0];
     if (!f) return;
     if (f.size > 2_000_000) { info.replaceChildren('That file is too large. Keep it under 2 MB.'); return; }
-    const table = parseCsv(await f.text());
+    table = parseCsv(await f.text());
     if (table.length < 2) { info.replaceChildren('That file has no rows to import.'); return; }
-    plan = planImport(key, table);
-    const matched = plan.map.map((m, i) => [plan.head[i], m]);
-    info.replaceChildren(
-      h('div', {}, h('b', {}, `${plan.rows.length} row${plan.rows.length === 1 ? '' : 's'}`), plan.rows.length > 500 ? h('span', { class: 'pill bad', style: 'margin-left:8px' }, 'Over 500. Split the file') : null),
-      h('table', { style: 'margin-top:8px' }, h('tbody', {}, matched.map(([col, m]) => h('tr', {}, h('td', {}, col), h('td', { class: 'muted' }, '→'), h('td', {}, m ? m.l : h('span', { class: 'muted' }, 'Ignored (no matching field)')))))),
-      plan.problems.length ? h('div', { class: 'banner', style: 'margin-top:10px' }, h('b', {}, `${plan.problems.length} problem${plan.problems.length === 1 ? '' : 's'} to fix in the file:`),
-        h('ul', { style: 'margin:6px 0 0 18px;padding:0' }, plan.problems.slice(0, 10).map((p) => h('li', {}, p))), plan.problems.length > 10 ? h('div', {}, `and ${plan.problems.length - 10} more`) : null) : h('div', { class: 'pill ok', style: 'margin-top:10px' }, 'Looks good'));
+    info.replaceChildren();
+    choices = matchColumns(key, table[0]);
+    replan(); drawMap();
   });
   modal(`Import ${ent.label.toLowerCase()} from CSV`, h('div', {}, file, h('div', { style: 'margin-top:6px' }, template),
-    info, h('label', { class: 'inline', style: 'margin-top:12px;gap:8px' }, skip, 'Skip rows that already exist (same ' + (key === 'accounts' ? 'domain' : 'email') + ')')), [
+    info, mapBox, result, h('label', { class: 'inline', style: 'margin-top:12px;gap:8px' }, skip, 'Skip rows that already exist (same ' + (key === 'accounts' ? 'domain' : 'email') + ')')), [
     { label: 'Cancel' },
     { label: 'Import', primary: true, run: async (dlg) => {
       if (!plan) throw new ApiErr(400, { message: 'Choose a CSV file first' });
-      if (plan.problems.length) throw new ApiErr(400, { message: 'Fix the problems listed, then choose the file again' });
+      if (plan.problems.length) throw new ApiErr(400, { message: 'Fix the problems listed first' });
+      if (!plan.map.some(Boolean)) throw new ApiErr(400, { message: 'Choose where at least one column should go' });
       if (plan.rows.length > 500) throw new ApiErr(400, { message: 'Import up to 500 rows at a time. Split the file in parts' });
+      // New custom fields are created first, once each, so the rows can be saved into them.
+      const fresh = new Map(plan.map.filter((m) => m?.newField).map((m) => [m.cf, m.newField]));
+      if (fresh.size) {
+        const object = CF_OBJECTS.find((o) => o[1] === key)[0];
+        for (const nfd of fresh.values()) await api('POST', '/settings/custom-fields', { object, label: nfd.label, kind: nfd.kind });
+        applyCustomFields((await api('GET', '/settings/custom-fields')).data);
+      }
       let res;
       try { res = await api('POST', `/${ent.path}/import`, { rows: plan.rows, skip_duplicates: skip.checked }); }
       catch (e) {
         const list = e.details?.errors;
-        if (list) throw new ApiErr(422, { message: `${e.message}. ` + list.slice(0, 5).map((x) => `Row ${x.row + 1}: ${x.message}`).join('. ') });
+        if (list) throw new ApiErr(422, { message: `${e.message}. ` + list.slice(0, 5).map((x) => `Row ${x.row + 1}: ${x.message}`).join('. ') + (fresh.size ? '. The new custom fields were already added, so they will be there when you try again.' : '') });
         throw e;
       }
       dlg.close();
