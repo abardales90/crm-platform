@@ -127,7 +127,7 @@ export function settingsRoutes(app: FastifyInstance, kit: Kit, email: EmailConfi
       return u as { email: string; display_name: string };
     });
     try {
-      await email!.send({ from: email!.from, to: prep.email, subject: 'Test email from your CRM', text: `Hi ${prep.display_name.split(' ')[0]},\n\nThis is a test. If you can read it, your CRM can send email.`, replyTo: email!.replyTo });
+      await email!.send({ from: email!.from, to: prep.email, subject: 'Test email from Tally', text: `Hi ${prep.display_name.split(' ')[0]},\n\nThis is a test. If you can read it, Tally can send email.`, replyTo: email!.replyTo });
     } catch (e) {
       if (e instanceof EmailError) throw new ApiError(502, 'email_failed', e.message);
       throw e;

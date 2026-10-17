@@ -2,6 +2,13 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.5', date: '2026-10-17', title: 'Meet Tally',
+    items: [
+      'The CRM has a name now: Tally.',
+      'New logo in the menu, on the sign in page, and on the browser tab.',
+    ],
+  },
+  {
     id: '0.4', date: '2026-10-17', title: 'Colors, a welcome tour, and update notes',
     items: [
       'Pick your own color in Settings. Your choice follows you to any device you sign in on.',

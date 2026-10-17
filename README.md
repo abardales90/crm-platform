@@ -1,4 +1,4 @@
-# CRM Platform: Postgres schema v0
+# Tally (CRM platform): Postgres schema v0
 
 24 tables, 10 migrations, 89 isolation and behavior tests.
 

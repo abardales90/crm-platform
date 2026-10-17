@@ -1,4 +1,4 @@
-// CRM web app. No build step. All text from the server goes in with textContent, never as HTML.
+// Tally web app. No build step. All text from the server goes in with textContent, never as HTML.
 import { RELEASES } from './changelog.js';
 
 const TOKEN_KEY = 'crm_token';
@@ -867,7 +867,7 @@ async function viewSettings(tabKey) {
 
   // welcome tour
   parts.push(card('Welcome tour', h('div', { class: 'inline' },
-    h('p', { style: 'margin:0;flex:1;min-width:220px' }, 'A one minute walk through the main parts of the CRM. Play it again any time.'),
+    h('p', { style: 'margin:0;flex:1;min-width:220px' }, 'A one minute walk through the main parts of Tally. Play it again any time.'),
     h('button', { onclick: () => runTour({ required: false }) }, 'Take the tour'))));
 
   // workspace
@@ -944,7 +944,7 @@ async function viewSettings(tabKey) {
 
 // ---------- welcome tour and what's new ----------
 const TOUR = [
-  { title: 'Welcome to your CRM', text: ['This is one place for your customers, your deals, and your support cases.', 'The tour takes about a minute.'] },
+  { title: 'Welcome to Tally', text: ['This is one place for your customers, your deals, and your support cases.', 'The tour takes about a minute.'] },
   { title: 'Accounts and contacts', target: '#/accounts', text: ['Accounts are the companies you work with. Contacts are the people at those companies.', 'Open any record to see everything about it in one place.'] },
   { title: 'Deals', target: '#/deals', text: ['Deals are the sales you are working on.', 'Drag a deal from one stage to the next as it moves along.'] },
   { title: 'Cases', target: '#/cases', text: ['Cases are customer questions and problems. Each one has a clock for the first reply and for solving it.', 'You can reply to the customer by email from inside the case once email is turned on.'] },
@@ -1013,7 +1013,7 @@ async function welcome() {
 
 // ---------- shell, sign in, routing ----------
 const LOGIN_ERRORS = {
-  not_invited: 'That Google account has not been added to this CRM yet. Ask an admin to add your email under Settings, People.',
+  not_invited: 'That Google account has not been added to Tally yet. Ask an admin to add your email under Settings, People.',
   disabled: 'This account has been turned off. Ask an admin to turn it back on.',
   unverified: 'Google says that email address is not verified, so it cannot be used to sign in.',
   cancelled: 'Google sign in was cancelled.',
@@ -1060,7 +1060,7 @@ async function renderLogin(msg) {
   // Built only when needed: an element can sit in one place, and err is shared by whichever card is shown.
   const nothing = () => h('div', { class: 'card' }, h('h1', { style: 'margin-bottom:12px' }, 'Sign in'), err, h('p', { class: 'muted', style: 'margin:0' }, 'No way to sign in is turned on for this server yet.'));
   $('#app').replaceChildren(h('div', { class: 'login' },
-    h('div', { class: 'brand', style: 'padding-left:0' }, h('i'), 'CRM'),
+    h('div', { class: 'brand', style: 'padding-left:0' }, h('img', { src: 'logo.svg', alt: '', width: 24, height: 24 }), 'Tally'),
     cfg.google ? googleCard() : null,
     cfg.google && cfg.key ? h('details', { style: 'margin-top:12px' }, h('summary', { class: 'muted' }, 'Use the shared access key instead'), h('div', { style: 'margin-top:8px' }, keyForm)) : null,
     !cfg.google && cfg.key ? keyForm : null,
@@ -1079,7 +1079,7 @@ function renderShell() {
     ['#/deals', 'Deals', can('opportunity', 'read')], ['#/cases', 'Cases', can('case', 'read')],
     ['#/reports', 'Reports', can('case', 'read') || can('opportunity', 'read') || can('account', 'read')]];
   $('#app').replaceChildren(h('div', { class: 'shell' },
-    h('nav', { class: 'side' }, h('div', { class: 'brand' }, h('i'), 'CRM'),
+    h('nav', { class: 'side' }, h('div', { class: 'brand' }, h('img', { src: 'logo.svg', alt: '', width: 24, height: 24 }), 'Tally'),
       items.filter((i) => i[2]).map(([href, label]) => h('a', { class: 'item', href, 'data-nav': href }, label)),
       h('div', { class: 'bottombar' },
         h('div', { class: 'who' }, h('b', {}, me.user.display_name), h('span', { class: 'muted' }, me.user.email), h('div', {}, h('a', { href: '#', onclick: (e) => { e.preventDefault(); signOut(); } }, 'Sign out'))),
@@ -1110,7 +1110,7 @@ async function route() {
 
 async function boot() {
   me = await api('GET', '/me');
-  // A failure here must never block sign in: the CRM just shows the default look.
+  // A failure here must never block sign in: Tally just shows the default look.
   prefs = await api('GET', '/me/preferences').catch(() => ({ accent: null, tour_done_at: 'unknown', last_seen_release: RELEASES[0].id }));
   applyAccent(prefs.accent);
   await loadRefs();

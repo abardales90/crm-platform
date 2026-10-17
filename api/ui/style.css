@@ -55,7 +55,7 @@ h2 { font-size: 15px; margin: 0 0 10px; font-weight: 650; }
 .shell > main { min-width: 0; }
 nav.side { background: var(--panel); border-right: 1px solid var(--line); padding: 16px 12px; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 2px; }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; padding: 4px 10px 14px; font-size: 15px; }
-.brand i { width: 24px; height: 24px; border-radius: 6px; background: var(--accent); display: inline-block; }
+.brand img { width: 24px; height: 24px; display: block; }
 nav.side a.item { display: block; padding: 8px 10px; border-radius: 6px; color: var(--ink); }
 nav.side a.item:hover { background: var(--bg); text-decoration: none; }
 nav.side a.item.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
