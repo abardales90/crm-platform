@@ -2,7 +2,7 @@
 # Applies db/migrations/*.sql in order, once each, inside one transaction per file.
 # Usage: PGHOST=... PGPORT=... PGUSER=... PGDATABASE=... ./db/migrate.sh
 set -euo pipefail
-DIR="$(cd "$(dirname "$0")" && pwd)/migrations"
+DIR="$(cd "$(dirname "$0")/../api" && pwd)/migrations"
 
 psql -v ON_ERROR_STOP=1 -q -c "
   CREATE TABLE IF NOT EXISTS schema_migrations (

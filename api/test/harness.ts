@@ -23,7 +23,7 @@ export async function setup() {
   const dbUrl = (user: string) => ADMIN.replace('/postgres?', `/${DBNAME}?`).replace('//postgres@', `//${user}@`);
   const root = new pg.Client({ connectionString: dbUrl('postgres') });
   await root.connect();
-  const dir = join(__dirname, '../../db/migrations');
+  const dir = join(__dirname, '../migrations');
   for (const f of readdirSync(dir).filter((x) => x.endsWith('.sql')).sort()) await root.query(readFileSync(join(dir, f), 'utf8'));
   await root.query(`CREATE ROLE api_test_login LOGIN IN ROLE crm_app`);
 

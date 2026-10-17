@@ -5,7 +5,7 @@
 ## Run it
 
     export PGHOST=... PGPORT=5432 PGUSER=postgres PGDATABASE=crm
-    db/migrate.sh          # applies db/migrations/*.sql once each, in order
+    db/migrate.sh          # applies api/migrations/*.sql once each, in order
     db/tests/run.sh        # builds a throwaway database, migrates, runs all tests
 
 Needs Postgres 16 and a superuser for migrations and tests. The tests connect as non-superuser login roles, because superusers skip row level security and would prove nothing.
@@ -58,3 +58,9 @@ read the login key on the service's Environment tab. Sign in with your tenant ad
   - EMAIL_REPLY_TO: optional
 - Without those two, everything else works and the reply box explains how to turn email on.
 - Existing database: run db/update_0009_email.sql once in the Neon SQL Editor.
+
+## Automatic database updates
+
+Migrations live in api/migrations. If the environment variable MIGRATE_DATABASE_URL is set, the app applies any new migration files when it starts, each in its own transaction, and stops (leaving the old version running on Render) if one fails.
+
+MIGRATE_DATABASE_URL must be a login that can change the database, such as the Neon owner login. Keep DATABASE_URL as the limited crm_api login.

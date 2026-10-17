@@ -1,5 +1,7 @@
 export const config = {
   databaseUrl: process.env.DATABASE_URL ?? '',
+  // Optional. A login that is allowed to change the database. When set, the app applies new migrations at startup.
+  migrateDatabaseUrl: process.env.MIGRATE_DATABASE_URL ?? '',
   jwtSecret: process.env.JWT_SECRET ?? '',
   port: Number(process.env.PORT ?? 3000),
   // Stopgap login for a one person sandbox. Replace with SSO before anyone else uses this.
