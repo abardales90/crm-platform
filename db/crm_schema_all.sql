@@ -1158,3 +1158,77 @@ ALTER TABLE user_preference
   ADD COLUMN nav_order text[]
     CHECK (nav_order IS NULL OR (cardinality(nav_order) BETWEEN 1 AND 12 AND array_to_string(nav_order, ',') ~ '^[a-z]{1,20}(,[a-z]{1,20})*$')),
   ADD COLUMN nav_collapsed boolean NOT NULL DEFAULT false;
+
+-- ===== migrations/0012_custom_fields.sql =====
+-- 0012 custom fields: each workspace can add its own fields to accounts, contacts, deals and cases.
+-- The definitions live here. The values live in the existing "custom" column of each record.
+
+CREATE TABLE custom_field (
+  id          uuid PRIMARY KEY DEFAULT uuid_v7(),
+  tenant_id   uuid NOT NULL REFERENCES tenant (id),
+  object      text NOT NULL CHECK (object IN ('account', 'contact', 'opportunity', 'case')),
+  key         text NOT NULL CHECK (key ~ '^[a-z][a-z0-9_]{0,39}$'),
+  label       text NOT NULL CHECK (length(btrim(label)) BETWEEN 1 AND 60),
+  kind        text NOT NULL CHECK (kind IN ('text', 'long text', 'number', 'date', 'checkbox', 'pick one')),
+  options     text[] CHECK (options IS NULL OR cardinality(options) BETWEEN 1 AND 30),
+  required    boolean NOT NULL DEFAULT false,
+  sort_order  integer NOT NULL DEFAULT 0,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  created_by  uuid,
+  updated_by  uuid,
+  deleted_at  timestamptz,
+  version     integer NOT NULL DEFAULT 1,
+  UNIQUE (tenant_id, id),
+  CHECK ((kind = 'pick one') = (options IS NOT NULL))
+);
+-- A key is never reused for another field, even after the old one is removed.
+CREATE UNIQUE INDEX custom_field_key_uq ON custom_field (tenant_id, object, key);
+
+ALTER TABLE custom_field ENABLE ROW LEVEL SECURITY;
+ALTER TABLE custom_field FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON custom_field
+  USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+GRANT SELECT, INSERT, UPDATE ON custom_field TO crm_app;
+GRANT SELECT ON custom_field TO crm_readonly;
+
+CREATE TRIGGER custom_field_std BEFORE INSERT OR UPDATE ON custom_field
+  FOR EACH ROW EXECUTE FUNCTION trg_set_standard_columns();
+CREATE TRIGGER custom_field_tenant_immutable BEFORE UPDATE ON custom_field
+  FOR EACH ROW EXECUTE FUNCTION trg_prevent_tenant_change();
+
+-- ===== migrations/0013_saved_views.sql =====
+-- 0013 saved views: a named set of list filters. Private to the person who made it, or shared with the whole workspace.
+
+CREATE TABLE saved_view (
+  id          uuid PRIMARY KEY DEFAULT uuid_v7(),
+  tenant_id   uuid NOT NULL REFERENCES tenant (id),
+  user_id     uuid NOT NULL,
+  object      text NOT NULL CHECK (object IN ('accounts', 'contacts', 'deals', 'cases')),
+  name        text NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 60),
+  filter      jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(filter) = 'object' AND length(filter::text) <= 8000),
+  is_shared   boolean NOT NULL DEFAULT false,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  created_by  uuid,
+  updated_by  uuid,
+  deleted_at  timestamptz,
+  version     integer NOT NULL DEFAULT 1,
+  UNIQUE (tenant_id, id),
+  FOREIGN KEY (tenant_id, user_id) REFERENCES app_user (tenant_id, id)
+);
+CREATE UNIQUE INDEX saved_view_name_uq ON saved_view (tenant_id, user_id, object, lower(btrim(name))) WHERE deleted_at IS NULL;
+
+ALTER TABLE saved_view ENABLE ROW LEVEL SECURITY;
+ALTER TABLE saved_view FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON saved_view
+  USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+GRANT SELECT, INSERT, UPDATE ON saved_view TO crm_app;
+GRANT SELECT ON saved_view TO crm_readonly;
+
+CREATE TRIGGER saved_view_std BEFORE INSERT OR UPDATE ON saved_view
+  FOR EACH ROW EXECUTE FUNCTION trg_set_standard_columns();
+CREATE TRIGGER saved_view_tenant_immutable BEFORE UPDATE ON saved_view
+  FOR EACH ROW EXECUTE FUNCTION trg_prevent_tenant_change();

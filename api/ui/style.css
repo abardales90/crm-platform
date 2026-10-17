@@ -279,3 +279,10 @@ h1.titled .ico { color: var(--accent); flex: none; }
   .sr-side .tag { display: none; }
 }
 .sresults.stale a.sr, .sresults.stale .sg-head { opacity: .5; }
+
+/* saved views */
+.viewbar { margin: 0 0 12px; }
+.viewpick { max-width: 260px; }
+.filterpanel { margin-top: 10px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; display: grid; gap: 8px; }
+.condrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.condrow select, .condrow input { min-width: 140px; width: auto; }

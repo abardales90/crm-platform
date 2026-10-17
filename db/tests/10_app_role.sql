@@ -481,3 +481,63 @@ BEGIN
   ELSE RAISE EXCEPTION 'FAIL: 22e preference leaked across tenants'; END IF;
   PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'a_tenant'), false);
 END $t$;
+
+-- 23. custom_field: tenant isolated, key rules, never deleted by the app role
+SELECT pg_temp.use_tenant('a_tenant'), pg_temp.use_user('a_admin');
+DO $t$
+DECLARE v_id uuid; v_n int;
+BEGIN
+  INSERT INTO custom_field (tenant_id, object, key, label, kind) VALUES (pg_temp.ctx('a_tenant'), 'account', 'seats', 'Seats', 'number') RETURNING id INTO v_id;
+  RAISE NOTICE 'PASS: 23a custom field saved';
+  BEGIN
+    INSERT INTO custom_field (tenant_id, object, key, label, kind) VALUES (pg_temp.ctx('a_tenant'), 'account', 'seats', 'Seats again', 'text');
+    RAISE EXCEPTION 'FAIL: 23b repeated key accepted';
+  EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'PASS: 23b a key is never used twice'; END;
+  BEGIN
+    INSERT INTO custom_field (tenant_id, object, key, label, kind) VALUES (pg_temp.ctx('a_tenant'), 'account', 'Bad Key', 'x', 'text');
+    RAISE EXCEPTION 'FAIL: 23c odd key accepted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS: 23c odd key rejected'; END;
+  BEGIN
+    INSERT INTO custom_field (tenant_id, object, key, label, kind) VALUES (pg_temp.ctx('a_tenant'), 'account', 'pick', 'Pick', 'pick one');
+    RAISE EXCEPTION 'FAIL: 23d pick one without choices accepted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS: 23d pick one needs choices'; END;
+  BEGIN
+    DELETE FROM custom_field WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: 23e app role deleted a custom field';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS: 23e app role cannot delete custom fields'; END;
+  PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'b_tenant'), false);
+  SELECT count(*) INTO v_n FROM custom_field;
+  IF v_n = 0 THEN RAISE NOTICE 'PASS: 23f other tenant cannot see custom fields';
+  ELSE RAISE EXCEPTION 'FAIL: 23f custom field leaked across tenants'; END IF;
+  PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'a_tenant'), false);
+END $t$;
+
+-- 24. saved_view: tenant isolated, name rules, never deleted by the app role
+SELECT pg_temp.use_tenant('a_tenant'), pg_temp.use_user('a_admin');
+DO $t$
+DECLARE v_id uuid; v_n int;
+BEGIN
+  INSERT INTO saved_view (tenant_id, user_id, object, name, filter) VALUES (pg_temp.ctx('a_tenant'), pg_temp.ctx('a_admin')::uuid, 'cases', 'Open', '{"conditions":[]}') RETURNING id INTO v_id;
+  RAISE NOTICE 'PASS: 24a view saved';
+  BEGIN
+    INSERT INTO saved_view (tenant_id, user_id, object, name) VALUES (pg_temp.ctx('a_tenant'), pg_temp.ctx('a_admin')::uuid, 'cases', ' open ');
+    RAISE EXCEPTION 'FAIL: 24b repeated name accepted';
+  EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'PASS: 24b a person cannot repeat a view name'; END;
+  BEGIN
+    INSERT INTO saved_view (tenant_id, user_id, object, name) VALUES (pg_temp.ctx('a_tenant'), pg_temp.ctx('a_admin')::uuid, 'leads', 'x');
+    RAISE EXCEPTION 'FAIL: 24c unknown record type accepted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS: 24c unknown record type rejected'; END;
+  BEGIN
+    UPDATE saved_view SET filter = '[]'::jsonb WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: 24d filter that is not an object accepted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS: 24d filter must be an object'; END;
+  BEGIN
+    DELETE FROM saved_view WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: 24e app role deleted a view';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS: 24e app role cannot delete views'; END;
+  PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'b_tenant'), false);
+  SELECT count(*) INTO v_n FROM saved_view;
+  IF v_n = 0 THEN RAISE NOTICE 'PASS: 24f other tenant cannot see views';
+  ELSE RAISE EXCEPTION 'FAIL: 24f view leaked across tenants'; END IF;
+  PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'a_tenant'), false);
+END $t$;

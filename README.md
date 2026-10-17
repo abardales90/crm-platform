@@ -1,6 +1,6 @@
 # Tally (CRM platform): Postgres schema v0
 
-24 tables, 10 migrations, 89 isolation and behavior tests.
+26 tables, 10 migrations, 89 isolation and behavior tests.
 
 ## Run it
 
@@ -89,3 +89,10 @@ Optional. Turn it on in Render, Environment tab:
 The redirect URI to register in Google is PUBLIC_URL followed by /v1/auth/google/callback.
 
 Only people already listed under Settings, People can sign in. Google proves who they are. The People list decides who may enter. Once Google works, remove SANDBOX_LOGIN_KEY in Render to switch off the shared access key.
+
+## Version 0.8
+
+- Custom fields (migration 0012): admins add fields to accounts, contacts, deals and cases in Settings, Custom fields. Definitions live in `custom_field`. Values live in each record's existing `custom` column and are checked on create, update and import. A field key is never reused, removing a field hides it but keeps saved values.
+- Saved views (migration 0013): `saved_view` holds named filters per person, optionally shared with the workspace. Filters are applied on the screen to the rows already loaded.
+- My tasks and the Home count now include calls, meetings and emails that have a due date. Column headings were added.
+- Screen files are served with `Cache-Control: no-cache` plus an ETag, so a new release shows on the next visit.

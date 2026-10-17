@@ -2,6 +2,17 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.8', date: '2026-10-17', title: 'Your own fields, saved views, and a clearer task list',
+    items: [
+      'Custom fields: in Settings, Custom fields, add your own fields to accounts, contacts, deals and cases. Pick text, long text, number, date, yes or no, or a list of choices. You can mark one as required.',
+      'Your fields show on the record page, in the CSV download, and as columns in a CSV import.',
+      'Saved views: on Accounts, Contacts, Deals and Cases, click Filters to narrow the list (for example customers with a health score under 40). Save it as a view, and pick it from the menu next time. Tick Share to let everyone in your workspace use it. Only the person who made a view can change or delete it.',
+      'Filters work on your own custom fields too, and the CSV download keeps only what the filter shows.',
+      'My tasks now has column headings and shows the type of each item.',
+      'My tasks also lists calls, meetings and emails that have a due date and are assigned to you, so nothing you planned goes missing.',
+    ],
+  },
+  {
     id: '0.7', date: '2026-10-17', title: 'Search at the top, icons, and a menu you can arrange',
     items: [
       'Search now sits at the top of every page. It looks inside case descriptions, notes, tasks and replies, not only names, and shows a short preview of the words that matched.',

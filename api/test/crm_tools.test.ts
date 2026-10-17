@@ -262,3 +262,136 @@ describe('screen files', () => {
     await ui.close();
   });
 });
+
+describe('custom fields', () => {
+  const mk = async (body: any, who = A()) => w.call('POST', '/v1/settings/custom-fields', who, body);
+  let planId = '';
+
+  it('lets an admin add fields of each kind and makes a key from the name', async () => {
+    const t = await mk({ object: 'account', label: 'Contract Tier', kind: 'pick one', options: ['Gold', 'Silver', ' Gold '], required: false });
+    expect(t.status).toBe(201);
+    expect(t.body).toMatchObject({ key: 'contract_tier', kind: 'pick one', options: ['Gold', 'Silver'] });
+    planId = t.body.id;
+    for (const [label, kind] of [['Seats', 'number'], ['Go live', 'date'], ['Strategic', 'checkbox'], ['Blurb', 'long text'], ['Nickname', 'text']])
+      expect((await mk({ object: 'account', label, kind })).status).toBe(201);
+    const list = (await w.call('GET', '/v1/settings/custom-fields', A('agent'))).body.data;
+    expect(list.filter((f: any) => f.object === 'account').map((f: any) => f.key)).toEqual(['contract_tier', 'seats', 'go_live', 'strategic', 'blurb', 'nickname']);
+  });
+
+  it('only admins change them, and other companies never see them', async () => {
+    expect((await mk({ object: 'account', label: 'Sneaky', kind: 'text' }, A('sales'))).status).toBe(403);
+    expect((await w.call('PATCH', `/v1/settings/custom-fields/${planId}`, A('agent'), { label: 'x' })).status).toBe(403);
+    expect((await w.call('GET', '/v1/settings/custom-fields', B())).body.data).toEqual([]);
+    expect((await w.call('PATCH', `/v1/settings/custom-fields/${planId}`, B(), { label: 'x' })).status).toBe(404);
+  });
+
+  it('refuses bad definitions and repeated names', async () => {
+    expect((await mk({ object: 'lead', label: 'A', kind: 'text' })).status).toBe(400);
+    expect((await mk({ object: 'account', label: 'A', kind: 'color' })).status).toBe(400);
+    expect((await mk({ object: 'account', label: '   ', kind: 'text' })).status).toBe(400);
+    expect((await mk({ object: 'account', label: '123', kind: 'text' })).status).toBe(400);
+    expect((await mk({ object: 'account', label: 'Pick', kind: 'pick one', options: [] })).status).toBe(400);
+    expect((await mk({ object: 'account', label: 'seats', kind: 'text' })).status).toBe(409);
+  });
+
+  it('saves values on records, checks each kind, and merges on update', async () => {
+    const ok = await w.call('POST', '/v1/accounts', A(), { name: 'Custom Co', custom: { contract_tier: 'Gold', seats: 12, go_live: '2026-11-01', strategic: true, nickname: 'CC' } });
+    expect(ok.status).toBe(201);
+    expect(ok.body.custom).toMatchObject({ contract_tier: 'Gold', seats: 12, strategic: true });
+    const bad = async (custom: any) => (await w.call('POST', '/v1/accounts', A(), { name: 'Bad', custom })).status;
+    expect(await bad({ contract_tier: 'Bronze' })).toBe(400);
+    expect(await bad({ seats: '12' })).toBe(400);
+    expect(await bad({ go_live: '11/01/2026' })).toBe(400);
+    expect(await bad({ strategic: 'yes' })).toBe(400);
+    expect(await bad({ nope: 1 })).toBe(400);
+    expect(await bad([])).toBe(400);
+    const up = await w.call('PATCH', `/v1/accounts/${ok.body.id}`, A(), { version: ok.body.version, custom: { seats: 20, nickname: null } });
+    expect(up.status).toBe(200);
+    expect(up.body.custom).toEqual({ contract_tier: 'Gold', seats: 20, go_live: '2026-11-01', strategic: true });
+  });
+
+  it('can require a field, and the same field is not on other record types', async () => {
+    const f = await mk({ object: 'contact', label: 'Region', kind: 'pick one', options: ['East', 'West'], required: true });
+    expect((await w.call('POST', '/v1/contacts', A(), { last_name: 'NoRegion' })).status).toBe(400);
+    const c = await w.call('POST', '/v1/contacts', A(), { last_name: 'Reg', custom: { region: 'East' } });
+    expect(c.status).toBe(201);
+    expect((await w.call('PATCH', `/v1/contacts/${c.body.id}`, A(), { version: c.body.version, custom: { region: null } })).status).toBe(400);
+    expect((await w.call('POST', '/v1/accounts', A(), { name: 'Other type', custom: { region: 'East' } })).status).toBe(400);
+    const imp = await w.call('POST', '/v1/contacts/import', A(), { rows: [{ last_name: 'A', custom: { region: 'West' } }, { last_name: 'B' }] });
+    expect(imp.status).toBe(422);
+    expect(imp.body.error.details.errors).toEqual([{ row: 2, message: 'Region is required' }]);
+    await w.call('DELETE', `/v1/settings/custom-fields/${f.body.id}`, A());
+    expect((await w.call('POST', '/v1/contacts', A(), { last_name: 'Free' })).status).toBe(201);
+  });
+
+  it('renames and changes choices but never the key or kind, and removing keeps saved values', async () => {
+    const r = await w.call('PATCH', `/v1/settings/custom-fields/${planId}`, A(), { label: 'Tier', options: ['Gold', 'Silver', 'Bronze'], key: 'x', kind: 'text' });
+    expect(r.body).toMatchObject({ key: 'contract_tier', kind: 'pick one', label: 'Tier', options: ['Gold', 'Silver', 'Bronze'] });
+    const acc = (await w.call('POST', '/v1/accounts', A(), { name: 'Keeps', custom: { contract_tier: 'Bronze' } })).body;
+    expect((await w.call('DELETE', `/v1/settings/custom-fields/${planId}`, A())).status).toBe(204);
+    expect((await w.call('GET', `/v1/accounts/${acc.id}`, A())).body.custom.contract_tier).toBe('Bronze');
+    expect((await w.call('POST', '/v1/accounts', A(), { name: 'Late', custom: { contract_tier: 'Gold' } })).status).toBe(400);
+    expect((await mk({ object: 'account', label: 'Contract Tier', kind: 'text' })).status).toBe(409);
+  });
+
+  it('allows at most 20 per record type', async () => {
+    let last = 201;
+    for (let i = 0; i < 20 && last === 201; i++) last = (await mk({ object: 'case', label: 'Field ' + String.fromCharCode(97 + i), kind: 'text' })).status;
+    expect(last).toBe(201);
+    expect((await mk({ object: 'case', label: 'One more', kind: 'text' })).status).toBe(400);
+  });
+});
+
+describe('saved views', () => {
+  const mk = (body: any, who = A()) => w.call('POST', '/v1/views', who, body);
+  const list = async (object: string, who = A()) => (await w.call('GET', `/v1/views?object=${object}`, who)).body.data;
+  const flt = { search: 'north', conditions: [{ field: 'type', op: 'is', value: 'customer' }, { field: 'owner_user_id', op: 'is', value: '@me' }] };
+  let mine = '';
+
+  it('saves a view and gives it back, marked as mine', async () => {
+    const r = await mk({ object: 'accounts', name: 'My customers', filter: flt });
+    expect(r.status).toBe(201);
+    mine = r.body.id;
+    const got = (await list('accounts'))[0];
+    expect(got).toMatchObject({ name: 'My customers', mine: true, is_shared: false, filter: flt });
+  });
+
+  it('keeps private views private, and shows shared ones to everyone in the company', async () => {
+    expect(await list('accounts', A('sales'))).toEqual([]);
+    const sh = await mk({ object: 'accounts', name: 'Team list', filter: { conditions: [] }, is_shared: true });
+    const seen = await list('accounts', A('sales'));
+    expect(seen.map((v: any) => v.name)).toEqual(['Team list']);
+    expect(seen[0].mine).toBe(false);
+    expect(await list('accounts', B())).toEqual([]);
+    expect(sh.status).toBe(201);
+  });
+
+  it('lets only the owner change or remove a view', async () => {
+    const shared = (await list('accounts', A('sales')))[0].id;
+    expect((await w.call('PATCH', `/v1/views/${shared}`, A('sales'), { name: 'Hijack' })).status).toBe(403);
+    expect((await w.call('DELETE', `/v1/views/${shared}`, A('sales'))).status).toBe(403);
+    expect((await w.call('PATCH', `/v1/views/${mine}`, A('sales'), { name: 'x' })).status).toBe(404);
+    expect((await w.call('PATCH', `/v1/views/${mine}`, B(), { name: 'x' })).status).toBe(404);
+    const up = await w.call('PATCH', `/v1/views/${mine}`, A(), { name: 'Customers I own', is_shared: true });
+    expect(up.body).toMatchObject({ name: 'Customers I own', is_shared: true });
+    expect((await w.call('DELETE', `/v1/views/${shared}`, A())).status).toBe(204);
+    expect((await list('accounts', A('sales'))).map((v: any) => v.name)).toEqual(['Customers I own']);
+  });
+
+  it('refuses repeated names, bad filters and records the person cannot read', async () => {
+    expect((await mk({ object: 'accounts', name: ' customers i OWN ' })).status).toBe(409);
+    expect((await mk({ object: 'leads', name: 'x' })).status).toBe(400);
+    expect((await mk({ object: 'cases', name: '' })).status).toBe(400);
+    expect((await mk({ object: 'cases', name: 'a', filter: { conditions: [{ field: 'status', op: 'drop table', value: 1 }] } })).status).toBe(400);
+    expect((await mk({ object: 'cases', name: 'b', filter: { conditions: [{ field: 'status; --', op: 'is', value: 'x' }] } })).status).toBe(400);
+    expect((await mk({ object: 'cases', name: 'c', filter: { conditions: [{ field: 'status', op: 'is', value: { a: 1 } }] } })).status).toBe(400);
+    expect((await mk({ object: 'cases', name: 'd', filter: { conditions: new Array(11).fill({ field: 'status', op: 'is', value: 'x' }) } })).status).toBe(400);
+    expect((await w.call('GET', '/v1/views?object=cases', A('finance'))).status).toBe((await w.call('GET', '/v1/me', A('finance'))).body.permissions.case?.includes('read') ? 200 : 403);
+  });
+
+  it('lets the same name be used again after a view is removed, and needs a signed in user', async () => {
+    expect((await w.call('DELETE', `/v1/views/${mine}`, A())).status).toBe(204);
+    expect((await mk({ object: 'accounts', name: 'Customers I own' })).status).toBe(201);
+    expect((await w.call('GET', '/v1/views?object=accounts', {})).status).toBe(401);
+  });
+});

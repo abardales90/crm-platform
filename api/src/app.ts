@@ -12,6 +12,8 @@ import { caseMailRoutes } from './mail.js';
 import { prefRoutes } from './prefs.js';
 import { googleRoutes, type GoogleConfig } from './google.js';
 import { searchRoutes } from './search.js';
+import { customFieldRoutes, cleanCustom } from './customfields.js';
+import { viewRoutes } from './views.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const q = (c: string) => `"${c}"`; // column names only ever come from the schema whitelist
@@ -81,6 +83,17 @@ export function buildApp(opts: {
     return out;
   }
 
+  // Custom values are checked against the fields this workspace defined for that record type.
+  async function applyCustom(db: Db, res: Resource, cols: string[], fields: Record<string, unknown>, mode: 'create' | 'update') {
+    const object = ({ account: 'account', contact: 'contact', opportunity: 'opportunity', case: 'case' } as Record<string, string>)[res.perm];
+    if (!object || !cols.includes('custom')) return;
+    if (fields.custom === undefined) {
+      if (mode === 'create') { const c = await cleanCustom(db, object, {}, 'create'); if (Object.keys(c).length) fields.custom = JSON.stringify(c); }
+      return;
+    }
+    fields.custom = JSON.stringify(await cleanCustom(db, object, fields.custom, mode));
+  }
+
   if (opts.uiDir) {
     // no-cache means: keep a copy, but ask the server on every visit whether it is still the newest. Updates show up at once, and an unchanged file costs almost nothing.
     app.register(fastifyStatic, { root: opts.uiDir, prefix: '/', cacheControl: false, etag: true, lastModified: true,
@@ -144,6 +157,8 @@ export function buildApp(opts: {
   caseMailRoutes(app, kit, opts.email);
   prefRoutes(app, kit);
   searchRoutes(app, kit);
+  customFieldRoutes(app, kit);
+  viewRoutes(app, kit);
 
   for (const res of resources) {
     const base = `/v1/${res.path}`;
@@ -200,6 +215,7 @@ export function buildApp(opts: {
         const cols = await columnsOf(db, res.table);
         const acc = await accessMap(db, userId, res, cols);
         const fields = checkBody(req.body, res, cols, acc, 'create');
+        await applyCustom(db, res, cols, fields, 'create');
         if (res.defaultOwner && fields.owner_user_id === undefined) fields.owner_user_id = userId;
         const keys = Object.keys(fields);
         const tenantId = (await db.query(`SELECT current_tenant_id() AS t`)).rows[0].t;
@@ -231,6 +247,7 @@ export function buildApp(opts: {
             await db.query('SAVEPOINT imp_row');
             try {
               const fields = checkBody(rows[i], res, cols, acc, 'create');
+              await applyCustom(db, res, cols, fields, 'create');
               if (res.defaultOwner && fields.owner_user_id === undefined) fields.owner_user_id = userId;
               const keys = Object.keys(fields);
               const names = ['tenant_id', ...keys].map(q).join(', ');
@@ -264,9 +281,11 @@ export function buildApp(opts: {
         const body: any = req.body;
         if (!Number.isInteger(body?.version)) throw new ApiError(400, 'version_required', 'Send the version you last read, so edits never overwrite each other');
         const fields = checkBody(body, res, cols, acc, 'update');
+        await applyCustom(db, res, cols, fields, 'update');
         const keys = Object.keys(fields);
         if (keys.length === 0) throw new ApiError(400, 'bad_request', 'No fields to change');
-        const sets = keys.map((k, i) => `${q(k)} = $${i + 3}`).join(', ');
+        // Custom values are merged into what is already saved, and a null removes one value.
+        const sets = keys.map((k, i) => k === 'custom' ? `"custom" = jsonb_strip_nulls(COALESCE("custom", '{}'::jsonb) || $${i + 3}::jsonb)` : `${q(k)} = $${i + 3}`).join(', ');
         const r = await db.query(
           `UPDATE ${q(res.table)} SET ${sets} WHERE id = $1 AND version = $2 AND deleted_at IS NULL RETURNING *`,
           [id, body.version, ...keys.map((k) => fields[k])],

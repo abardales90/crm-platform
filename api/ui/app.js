@@ -223,6 +223,19 @@ const ENT = {
   },
 };
 
+// ---------- custom fields: fields a workspace adds to its own records ----------
+const KIND_T = { text: undefined, 'long text': 'textarea', number: 'number', date: 'date', checkbox: 'bool', 'pick one': 'cselect' };
+const kindLabels = { text: 'Short text', 'long text': 'Long text', number: 'Number', date: 'Date', checkbox: 'Yes or no box', 'pick one': 'Pick one from a list' };
+const CF_OBJECTS = [['account', 'accounts', 'Accounts'], ['contact', 'contacts', 'Contacts'], ['opportunity', 'deals', 'Deals'], ['case', 'cases', 'Cases']];
+for (const e of Object.values(ENT)) e.baseFields = e.fields;
+function applyCustomFields(defs) {
+  cache.customFields = defs;
+  for (const [obj, key] of CF_OBJECTS) {
+    ENT[key].fields = [...ENT[key].baseFields, ...defs.filter((d) => d.object === obj).map((d) => ({
+      k: 'custom.' + d.key, cf: d.key, l: d.label, t: KIND_T[d.kind], opts: d.options, req: d.required, create: d.required, wide: d.kind === 'long text' }))];
+  }
+}
+
 // ---------- form building ----------
 function selectOf(options, value, { blank = true } = {}) {
   const s = h('select', {}, blank ? h('option', { value: '' }, '') : null,
@@ -239,7 +252,7 @@ const cap = (s) => s == null ? '' : String(s).replace(/\b[a-z]/g, (c) => c.toUpp
 const optList = (arr) => arr.map((x) => [x, cap(x)]);
 
 function control(f, rec) {
-  let v = rec ? rec[f.k] : undefined;
+  let v = rec ? (f.cf ? rec.custom?.[f.cf] : rec[f.k]) : undefined;
   if (!rec) v = f.k === 'owner_user_id' ? me?.user?.id : CREATE_DEFAULTS[f.k];
   let input, get;
   switch (f.t) {
@@ -248,6 +261,7 @@ function control(f, rec) {
     case 'date': input = h('input', { type: 'date', value: v ? String(v).slice(0, 10) : '' }); get = () => input.value || null; break;
     case 'bool': input = h('input', { type: 'checkbox', checked: !!v }); get = () => input.checked; break;
     case 'select': input = selectOf(optList(f.opts), v, { blank: !f.req }); get = () => input.value || null; break;
+    case 'cselect': input = selectOf(f.opts.map((o) => [o, o]), v); get = () => input.value || null; break;
     case 'user': input = selectOf(cache.users.map((u) => [u.id, u.display_name]), v, { blank: !f.req }); get = () => input.value || null; break;
     case 'account': input = selectOf(cache.accounts.map((a) => [a.id, a.name]), v); get = () => input.value || null; break;
     case 'contact': input = selectOf(cache.contacts.map((c) => [c.id, ENT.contacts.title(c)]), v); get = () => input.value || null; break;
@@ -265,12 +279,13 @@ function control(f, rec) {
   if (f.k === 'domain') { const g = get; get = () => { const x = g(); return x && x.toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').split('/')[0]; }; }
   if (f.k === 'email') { const g = get; get = () => g()?.toLowerCase() ?? null; }
   input.dataset.k = f.k;
+  if (f.cf && f.t === 'bool') { const g = get; get = () => g() ? true : null; }
   const node = h('label', { class: 'f' + (f.wide ? ' wide' : '') }, h('span', {}, f.l, f.req ? h('span', { class: 'req' }, ' *') : null, f.hint ? h('span', { class: 'hint' }, ` (${f.hint})`) : null), input);
   return { node, input, get, f };
 }
 
 function makeForm(fields, rec, { disabled } = {}) {
-  const ctrls = fields.filter((f) => !rec || f.k in rec || f.k === 'assignee').map((f) => control(f, rec));
+  const ctrls = fields.filter((f) => !rec || (f.cf ? 'custom' in rec : f.k in rec) || f.k === 'assignee').map((f) => control(f, rec));
   ctrls.forEach((c) => { if (disabled) c.input.disabled = true; });
   const grid = h('div', { class: 'grid2' }, ctrls.map((c) => c.node));
   const norm = (f, x) => x == null || x === '' ? null : f.t === 'number' ? Number(x) : x;
@@ -279,13 +294,18 @@ function makeForm(fields, rec, { disabled } = {}) {
     // Every field as { key: value } (the assignee control expands to owner and queue).
     values() {
       const out = {};
-      for (const c of ctrls) { const x = c.get(); if (c.f.t === 'assignee') Object.assign(out, x); else out[c.f.k] = x; }
+      for (const c of ctrls) { const x = c.get(); if (c.f.t === 'assignee') Object.assign(out, x); else if (c.f.cf) { out.custom = out.custom || {}; if (x !== null) out.custom[c.f.cf] = x; } else out[c.f.k] = x; }
       return out;
     },
     // Only what the person actually changed, so fields they cannot edit are never sent.
     changed() {
       const now = this.values(), out = {};
       for (const c of ctrls) {
+        if (c.f.cf) {
+          const was = rec.custom?.[c.f.cf] ?? null, is = c.get();
+          if (norm(c.f, is) !== norm(c.f, was)) { out.custom = out.custom || {}; out.custom[c.f.cf] = is; }
+          continue;
+        }
         const keys = c.f.t === 'assignee' ? ['owner_user_id', 'queue_id'] : [c.f.k];
         for (const k of keys) {
           const f = c.f.t === 'assignee' ? {} : c.f;
@@ -298,15 +318,17 @@ function makeForm(fields, rec, { disabled } = {}) {
 }
 
 async function loadRefs() {
-  const [users, stages, queues, accounts, contacts, workspace] = await Promise.all([
+  const [users, stages, queues, accounts, contacts, workspace, customDefs] = await Promise.all([
     api('GET', '/users').then((r) => r.data),
     api('GET', '/pipeline-stages').then((r) => r.data).catch(() => []),
     api('GET', '/queues').then((r) => r.data).catch(() => []),
     can('account', 'read') ? listAll('/accounts') : [],
     can('contact', 'read') ? listAll('/contacts') : [],
     api('GET', '/settings/workspace').catch(() => null),
+    api('GET', '/settings/custom-fields').then((r) => r.data).catch(() => []),
   ]);
   cache.workspace = workspace;
+  applyCustomFields(customDefs);
   cache.users = users;
   cache.stages = stages.sort((a, b) => a.sort_order - b.sort_order);
   cache.queues = queues.filter((q) => q.is_active !== false);
@@ -344,7 +366,7 @@ function setView(...nodes) { view().replaceChildren(...nodes.flat(Infinity).filt
 async function viewHome() {
   const [cases, deals, myTasks] = await Promise.all([
     can('case', 'read') ? listAll('/cases') : [], can('opportunity', 'read') ? listAll('/opportunities') : [],
-    can('activity', 'read') ? listAll(`/activities?type=task&owner_user_id=${me.user.id}`) : [],
+    can('activity', 'read') ? listAll(`/activities?owner_user_id=${me.user.id}`).then((l) => l.filter((x) => x.type === 'task' || (x.due_at && x.type !== 'note'))) : [],
   ]);
   const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
   const tasksDue = myTasks.filter((t) => !t.completed_at && t.due_at && new Date(t.due_at) <= endOfToday);
@@ -390,7 +412,7 @@ function openCreate(key, defaults = {}, after) {
     { label: 'Cancel' },
     { label: 'Create', primary: true, run: async (dlg) => {
       const body = {};
-      for (const [k, v] of Object.entries({ ...form.values() })) if (v !== null && v !== '') body[k] = v;
+      for (const [k, v] of Object.entries({ ...form.values() })) if (v !== null && v !== '' && !(k === 'custom' && !Object.keys(v).length)) body[k] = v;
       if (key === 'deals') {
         const st = stageOf(body.stage_id);
         if (st?.is_closed && !st.is_won) throw new ApiErr(422, { message: 'Create the deal in an open stage, then move it to Closed Lost with a reason.' });
@@ -404,15 +426,169 @@ function openCreate(key, defaults = {}, after) {
   ]);
 }
 
+// ---------- saved views: filters you can name, keep, and share ----------
+const OP_LABEL = { contains: 'contains', is: 'is', is_not: 'is not', empty: 'is empty', not_empty: 'is not empty', gt: 'is more than', lt: 'is less than',
+  before: 'is before', after: 'is after', next_days: 'is within the next (days)', past_days: 'was within the last (days)' };
+const opsFor = (f) => f.t === 'number' ? ['is', 'gt', 'lt', 'empty', 'not_empty']
+  : f.t === 'date' ? ['before', 'after', 'next_days', 'past_days', 'empty', 'not_empty']
+  : f.t === 'bool' ? ['is']
+  : ['select', 'cselect', 'stage', 'user', 'assignee', 'account', 'contact'].includes(f.t) ? ['is', 'is_not', 'empty', 'not_empty']
+  : ['contains', 'is', 'empty', 'not_empty'];
+const condActive = (c) => ['empty', 'not_empty'].includes(c.op) || (c.value !== null && c.value !== undefined && c.value !== '');
+const dayStart = (d = new Date()) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+function condTest(f, c, r) {
+  const v = f.cf ? r.custom?.[f.cf] : r[f.k];
+  const blank = f.t === 'assignee' ? !(r.owner_user_id || r.queue_id) : v === null || v === undefined || v === '';
+  const n = Number(c.value);
+  switch (c.op) {
+    case 'empty': return blank;
+    case 'not_empty': return !blank;
+    case 'contains': return String(v ?? '').toLowerCase().includes(String(c.value ?? '').toLowerCase());
+    case 'is': case 'is_not': {
+      let eq;
+      if (f.t === 'bool') eq = !!v === (c.value === true);
+      else if (f.t === 'assignee') eq = c.value === '@me' ? r.owner_user_id === me.user.id : String(c.value).startsWith('u:') ? r.owner_user_id === String(c.value).slice(2) : r.queue_id === String(c.value).slice(2);
+      else if (f.t === 'user') eq = v === (c.value === '@me' ? me.user.id : c.value);
+      else if (f.t === 'number') eq = !blank && Number(v) === n;
+      else eq = String(v ?? '').toLowerCase() === String(c.value ?? '').toLowerCase();
+      return c.op === 'is' ? eq : !eq;
+    }
+    case 'gt': return !blank && Number(v) > n;
+    case 'lt': return !blank && Number(v) < n;
+    case 'before': return !blank && String(v).slice(0, 10) < String(c.value);
+    case 'after': return !blank && String(v).slice(0, 10) > String(c.value);
+    case 'next_days': case 'past_days': {
+      if (blank) return false;
+      const d = dayStart(new Date(String(v).slice(0, 10) + 'T00:00:00')), t0 = dayStart();
+      const edge = dayStart(t0); edge.setDate(edge.getDate() + (c.op === 'next_days' ? n : -n));
+      return c.op === 'next_days' ? d >= t0 && d <= edge : d <= t0 && d >= edge;
+    }
+  }
+  return true;
+}
+
+function valueInput(f, c, onchange) {
+  const set = (v) => { c.value = v; onchange(); };
+  if (['empty', 'not_empty'].includes(c.op)) return null;
+  if (['next_days', 'past_days'].includes(c.op) || f.t === 'number') { const i = h('input', { type: 'number', step: 'any', value: c.value ?? '', oninput: () => set(i.value === '' ? null : Number(i.value)) }); return i; }
+  if (f.t === 'date') { const i = h('input', { type: 'date', value: c.value ?? '', oninput: () => set(i.value || null) }); return i; }
+  const pick = (opts, blank = true) => { const sl = selectOf(opts, c.value, { blank }); sl.addEventListener('change', () => set(sl.value || null)); if (c.value == null && !blank && opts.length) set(opts[0][0]); return sl; };
+  switch (f.t) {
+    case 'bool': { const sl = selectOf([['yes', 'Yes'], ['no', 'No']], c.value === false ? 'no' : 'yes', { blank: false }); sl.addEventListener('change', () => set(sl.value === 'yes')); if (c.value == null) c.value = true; return sl; }
+    case 'select': return pick(optList(f.opts));
+    case 'cselect': return pick(f.opts.map((o) => [o, o]));
+    case 'user': return pick([['@me', 'Me'], ...cache.users.map((u) => [u.id, u.display_name])]);
+    case 'assignee': return pick([['@me', 'Me'], ...cache.users.map((u) => ['u:' + u.id, u.display_name]), ...cache.queues.map((q) => ['q:' + q.id, 'Queue: ' + q.name])]);
+    case 'account': return pick(cache.accounts.map((a) => [a.id, a.name]));
+    case 'contact': return pick(cache.contacts.map((x) => [x.id, ENT.contacts.title(x)]));
+    case 'stage': return pick(cache.stages.map((x) => [x.id, x.name]));
+    default: { const i = h('input', { type: 'text', value: c.value ?? '', oninput: () => set(i.value || null) }); return i; }
+  }
+}
+
+// The bar above a list: pick a saved view, edit the filters, save, share, remove.
+// `rows` are the loaded records, `searchEl` is the list's own search box, `redraw` repaints the list.
+async function viewsBar(key, rows, searchEl, redraw) {
+  const ent = ENT[key];
+  let views = (await api('GET', '/views?object=' + key).catch(() => ({ data: [] }))).data;
+  const fieldsAll = ent.fields;
+  const fieldOf = (k) => fieldsAll.find((f) => f.k === k);
+  let active = null;
+  let conds = [];
+  const lsKey = 'tally_view_' + key;
+  const remember = (id) => { try { id ? localStorage.setItem(lsKey, id) : localStorage.removeItem(lsKey); } catch { /* private mode */ } };
+  const snapshot = () => JSON.stringify({ search: searchEl.value.trim(), conditions: conds.filter(condActive).map((c) => ({ field: c.field, op: c.op, value: c.value ?? null })) });
+  const savedSnapshot = () => active ? JSON.stringify({ search: active.filter.search || '', conditions: (active.filter.conditions || []).map((c) => ({ field: c.field, op: c.op, value: c.value ?? null })) }) : JSON.stringify({ search: '', conditions: [] });
+  const sel = h('select', { class: 'viewpick', 'aria-label': 'Saved views' });
+  const panel = h('div', { class: 'filterpanel', hidden: true });
+  const tools = h('span', { class: 'inline', style: 'gap:6px;flex-wrap:wrap' });
+  const toggle = h('button', { class: 'small', onclick: () => { panel.hidden = !panel.hidden; } });
+  const el = h('div', { class: 'viewbar' }, h('div', { class: 'inline', style: 'gap:8px;flex-wrap:wrap' }, sel, toggle, tools), panel);
+
+  const changed = () => { redraw(); drawBar(); };
+  const drawPanel = () => {
+    fill(panel, [
+      conds.length ? null : h('div', { class: 'muted' }, 'No filters yet. Add one to narrow the list.'),
+      conds.map((c, i) => {
+        const f = fieldOf(c.field) || fieldsAll[0];
+        const fsel = selectOf(fieldsAll.map((x) => [x.k, x.l]), c.field, { blank: false });
+        const osel = selectOf(opsFor(f).map((o) => [o, OP_LABEL[o]]), c.op, { blank: false });
+        fsel.addEventListener('change', () => { const nf = fieldOf(fsel.value); conds[i] = { field: nf.k, op: opsFor(nf)[0], value: null }; drawPanel(); changed(); });
+        osel.addEventListener('change', () => { c.op = osel.value; if (['empty', 'not_empty'].includes(c.op)) c.value = null; drawPanel(); changed(); });
+        return h('div', { class: 'condrow' }, fsel, osel, valueInput(f, c, changed),
+          h('button', { class: 'small', 'aria-label': 'Remove this filter', onclick: () => { conds.splice(i, 1); drawPanel(); changed(); } }, 'Remove'));
+      }),
+      h('div', { class: 'actions' }, conds.length >= 10 ? null : h('button', { class: 'small', onclick: () => { const f = fieldsAll[0]; conds.push({ field: f.k, op: opsFor(f)[0], value: null }); drawPanel(); drawBar(); } }, 'Add a filter')),
+    ]);
+  };
+  const drawBar = () => {
+    const mine = views.filter((v) => v.mine), shared = views.filter((v) => !v.mine);
+    const keep = active?.id ?? '';
+    fill(sel, [h('option', { value: '' }, 'All ' + ent.label.toLowerCase()),
+      mine.length ? h('optgroup', { label: 'My views' }, mine.map((v) => h('option', { value: v.id }, v.name + (v.is_shared ? ' (shared)' : '')))) : null,
+      shared.length ? h('optgroup', { label: 'Shared with everyone' }, shared.map((v) => h('option', { value: v.id }, `${v.name} (${v.owner_name || 'someone'})`))) : null]);
+    sel.value = keep;
+    const n = conds.filter(condActive).length;
+    toggle.textContent = n ? `Filters (${n})` : 'Filters';
+    const dirty = snapshot() !== savedSnapshot();
+    fill(tools, [
+      active && active.mine && dirty ? h('button', { class: 'small primary', onclick: update }, 'Save changes to this view') : null,
+      dirty && (conds.some(condActive) || searchEl.value.trim()) ? h('button', { class: 'small', onclick: saveNew }, 'Save as a new view') : null,
+      dirty ? h('button', { class: 'small', onclick: () => choose(active?.id ?? '') }, active ? 'Undo changes' : 'Clear filters') : null,
+      active && active.mine ? h('button', { class: 'small danger', onclick: remove }, 'Delete view') : null,
+      active && !active.mine ? h('span', { class: 'muted' }, 'Shared by ' + (active.owner_name || 'a teammate') + '. Save a copy to change it.') : null,
+    ]);
+  };
+  const choose = (id) => {
+    active = views.find((v) => v.id === id) || null;
+    conds = (active?.filter.conditions || []).map((c) => ({ ...c }));
+    searchEl.value = active?.filter.search || '';
+    remember(active?.id);
+    drawPanel(); changed();
+    if (conds.length) panel.hidden = false;
+  };
+  sel.addEventListener('change', () => choose(sel.value));
+  const nameDialog = (title, { name = '', shared = false } = {}, go) => {
+    const nm = h('input', { type: 'text', value: name, maxlength: 60, placeholder: 'For example: My open cases' });
+    const sh = h('input', { type: 'checkbox', checked: shared });
+    modal(title, h('div', {}, h('label', { class: 'f' }, h('span', {}, 'Name'), nm), h('label', { class: 'inline', style: 'gap:8px;margin-top:10px' }, sh, 'Share with everyone in this workspace')), [
+      { label: 'Cancel' }, { label: 'Save', primary: true, run: async (dlg) => { await go(nm.value, sh.checked); dlg.close(); } }]);
+    setTimeout(() => nm.focus(), 50);
+  };
+  const body = () => ({ search: searchEl.value.trim(), conditions: conds.filter(condActive).map((c) => ({ field: c.field, op: c.op, value: c.value ?? null })) });
+  const saveNew = () => nameDialog('Save as a new view', {}, async (name, shared) => {
+    const v = await api('POST', '/views', { object: key, name, filter: body(), is_shared: shared });
+    views = [...views, { ...v, owner_name: userName(me.user.id) }]; active = views.at(-1); remember(v.id); changed(); toast('View saved');
+  });
+  const update = async () => {
+    try {
+      const v = await api('PATCH', '/views/' + active.id, { filter: body() });
+      views = views.map((x) => x.id === v.id ? { ...x, ...v } : x); active = views.find((x) => x.id === v.id); changed(); toast('View updated');
+    } catch (e) { toast(errText(e), true); }
+  };
+  const remove = () => modal(`Delete "${active.name}"?`, h('p', {}, active.is_shared ? 'This view is shared, so it will disappear for everyone who uses it.' : 'The records are not touched. Only the saved filters go away.'), [
+    { label: 'Keep it' }, { label: 'Delete', primary: true, run: async (dlg) => {
+      await api('DELETE', '/views/' + active.id); views = views.filter((v) => v.id !== active.id); dlg.close(); toast('View deleted'); choose('');
+    } }]);
+  searchEl.addEventListener('input', drawBar);
+  let first = '';
+  try { first = localStorage.getItem(lsKey) || ''; } catch { /* private mode */ }
+  if (!views.some((v) => v.id === first)) first = '';
+  drawPanel();
+  const test = (r) => conds.every((c) => { if (!condActive(c)) return true; const f = fieldOf(c.field); return !f || condTest(f, c, r); });
+  return { el, test, start: () => { if (first) choose(first); else drawBar(); } };
+}
+
 async function viewList(key) {
   const ent = ENT[key];
   const rows = await listAll('/' + ent.path);
   const search = h('input', { class: 'search', type: 'search', placeholder: 'Search ' + ent.label.toLowerCase() });
   const body = h('tbody');
   let shown = rows;
+  let bar = null;
   const draw = () => {
     const q = search.value.toLowerCase();
-    shown = rows.filter((r) => !q || JSON.stringify(Object.values(r)).toLowerCase().includes(q) || ent.title(r).toLowerCase().includes(q));
+    shown = rows.filter((r) => (!bar || bar.test(r)) && (!q || JSON.stringify(Object.values(r)).toLowerCase().includes(q) || ent.title(r).toLowerCase().includes(q)));
     body.replaceChildren(...shown.map((r) => h('tr', { class: 'row', onclick: () => location.hash = `#/${key}/${r.id}` },
       ent.cols.map((c) => h('td', {}, cell(c, r))))));
     count.textContent = `${shown.length} of ${rows.length}`;
@@ -421,12 +597,15 @@ async function viewList(key) {
   const count = h('span', { class: 'muted' });
   const empty = h('div', { class: 'empty' }, rows.length ? 'Nothing matches.' : `No ${ent.label.toLowerCase()} yet.`);
   search.addEventListener('input', draw);
+  bar = await viewsBar(key, rows, search, draw);
   setView(
     h('div', { class: 'head' }, titled(key, ent.label),
       h('div', { class: 'tools' }, count, search, exportButton(key, () => shown),
         ['accounts', 'contacts'].includes(key) && can(ent.perm, 'create') ? h('button', { class: 'small', onclick: () => openImport(key) }, 'Import CSV') : null,
         can(ent.perm, 'create') ? h('button', { class: 'primary', onclick: () => openCreate(key) }, 'New ' + ent.one.toLowerCase()) : null)),
+    bar.el,
     h('div', { class: 'card tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ent.cols.map((c) => h('th', {}, c[1])))), body), empty));
+  bar.start();
   draw();
 }
 
@@ -454,10 +633,11 @@ async function viewDeals() {
   const deals = await listAll('/opportunities');
   const search = h('input', { class: 'search', type: 'search', placeholder: 'Search deals' });
   const board = h('div', { class: 'board' });
+  let bar = null;
   const draw = () => {
     const q = search.value.toLowerCase();
     board.replaceChildren(...cache.stages.map((st) => {
-      const list = deals.filter((d) => d.stage_id === st.id && (!q || (d.name + ' ' + (cache.accounts.find((a) => a.id === d.account_id)?.name || '')).toLowerCase().includes(q)));
+      const list = deals.filter((d) => d.stage_id === st.id && (!bar || bar.test(d)) && (!q || (d.name + ' ' + (cache.accounts.find((a) => a.id === d.account_id)?.name || '')).toLowerCase().includes(q)));
       const total = list.reduce((s, d) => s + Number(d.amount || 0), 0);
       const col = h('div', { class: 'col' }, h('h3', {}, st.name, h('span', {}, `${list.length} · ${money(total)}`)),
         list.map((d) => h('div', { class: 'deal', draggable: 'true',
@@ -480,8 +660,10 @@ async function viewDeals() {
     }));
   };
   search.addEventListener('input', draw);
+  bar = await viewsBar('deals', deals, search, draw);
   setView(h('div', { class: 'head' }, titled('deals', 'Deals'),
-    h('div', { class: 'tools' }, search, exportButton('deals', () => deals), can('opportunity', 'create') ? h('button', { class: 'primary', onclick: () => openCreate('deals') }, 'New deal') : null)), board);
+    h('div', { class: 'tools' }, search, exportButton('deals', () => deals.filter((d) => bar.test(d))), can('opportunity', 'create') ? h('button', { class: 'primary', onclick: () => openCreate('deals') }, 'New deal') : null)), bar.el, board);
+  bar.start();
   draw();
 }
 
@@ -857,7 +1039,7 @@ async function viewReports(tabKey) {
 const THEMES = [['system', 'Match my device'], ['light', 'Light'], ['dark', 'Dark']];
 const STATUS_LABEL = { active: 'Active', invited: 'Invited', disabled: 'Turned off' };
 
-const SETTINGS_TABS = [['general', 'General', () => true], ['people', 'People', () => can('app_user', 'read')], ['changelog', 'Change log', () => true]];
+const SETTINGS_TABS = [['general', 'General', () => true], ['people', 'People', () => can('app_user', 'read')], ['fields', 'Custom fields', () => can('app_user', 'edit')], ['changelog', 'Change log', () => true]];
 
 function releaseList(list) {
   return h('div', {}, list.map((r, i) => h('div', { class: 'release' },
@@ -971,6 +1153,55 @@ async function viewSettings(tabKey) {
       ]);
     }
     draw().catch((e) => wrap.replaceChildren(h('div', { class: 'banner' }, errText(e))));
+  }
+
+  if (tab === 'fields' && canEditUsers) {
+    const wrap = h('div');
+    const draw = () => {
+      const defs = cache.customFields || [];
+      fill(wrap, CF_OBJECTS.map(([obj, , label]) => {
+        const list = defs.filter((d) => d.object === obj);
+        return card(label, h('div', {},
+          list.length ? h('table', {}, h('tbody', {}, list.map((d) => h('tr', {},
+            h('td', {}, d.label, d.required ? h('span', { class: 'req' }, ' *') : null),
+            h('td', {}, h('span', { class: 'pill' }, kindLabels[d.kind])),
+            h('td', { class: 'muted' }, d.options ? d.options.join(', ') : ''),
+            h('td', { style: 'text-align:right;white-space:nowrap' },
+              h('button', { class: 'small', onclick: () => editField(d) }, 'Edit'), ' ',
+              h('button', { class: 'small danger', onclick: () => removeField(d) }, 'Remove')))))) : h('p', { class: 'muted', style: 'margin:0 0 8px' }, 'No custom fields yet.'),
+          h('div', { class: 'actions' }, list.length >= 20 ? h('span', { class: 'muted' }, 'You have reached 20 fields for this record type.') : h('button', { onclick: () => editField(null, obj) }, 'Add a field'))));
+      }));
+    };
+    const reload = async () => { applyCustomFields((await api('GET', '/settings/custom-fields')).data); draw(); };
+    const removeField = (d) => modal(`Remove "${d.label}"?`, h('p', {}, 'The field disappears from forms, imports and downloads. Values already saved on records are kept, but you will not see them.'), [
+      { label: 'Keep it' },
+      { label: 'Remove', primary: true, run: async (dlg) => { await api('DELETE', '/settings/custom-fields/' + d.id); dlg.close(); await reload(); toast('Removed'); } }]);
+    const editField = (d, obj) => {
+      const label = h('input', { type: 'text', value: d?.label ?? '', maxlength: 60 });
+      const kind = selectOf(Object.keys(KIND_T).map((k) => [k, cap(k)]), d?.kind ?? 'text', { blank: false });
+      Array.from(kind.options).forEach((o) => { o.textContent = kindLabels[o.value]; });
+      kind.disabled = !!d;
+      const opts = h('textarea', { placeholder: 'One choice per line', value: (d?.options || []).join('\n') });
+      const optsBox = h('label', { class: 'f wide' }, h('span', {}, 'Choices'), opts);
+      const req = h('input', { type: 'checkbox', checked: !!d?.required });
+      const sync = () => { optsBox.hidden = kind.value !== 'pick one'; };
+      kind.addEventListener('change', sync); sync();
+      modal(d ? 'Edit field' : 'Add a field', h('div', { class: 'grid2' },
+        h('label', { class: 'f wide' }, h('span', {}, 'Name'), label),
+        h('label', { class: 'f' }, h('span', {}, 'Kind', d ? h('span', { class: 'hint' }, ' (cannot change)') : null), kind),
+        h('label', { class: 'f inline', style: 'gap:8px;align-self:end' }, req, 'Required'), optsBox), [
+        { label: 'Cancel' },
+        { label: d ? 'Save' : 'Add', primary: true, run: async (dlg) => {
+          const body = { label: label.value.trim(), required: req.checked };
+          if (kind.value === 'pick one') body.options = opts.value.split('\n').map((x) => x.trim()).filter(Boolean);
+          if (d) await api('PATCH', '/settings/custom-fields/' + d.id, body);
+          else await api('POST', '/settings/custom-fields', { ...body, object: obj, kind: kind.value });
+          dlg.close(); await reload(); toast('Saved');
+        } }]);
+    };
+    parts.push(h('p', { class: 'muted', style: 'margin:0 0 12px' }, 'Add your own fields to accounts, contacts, deals and cases. They show up on the record page, in downloads and in CSV imports. Fields marked * must be filled in whenever a record is created.'));
+    parts.push(wrap);
+    draw();
   }
 
   if (tab === 'changelog') parts.push(h('div', { class: 'card' }, releaseList(RELEASES)));
@@ -1128,7 +1359,7 @@ function parseCsv(text) {
 
 // What a person expects to see in a spreadsheet cell for each kind of field.
 function exportValue(f, r) {
-  const v = r[f.k];
+  const v = f.cf ? r.custom?.[f.cf] : r[f.k];
   switch (f.t) {
     case 'user': return userName(v);
     case 'account': return cache.accounts.find((a) => a.id === v)?.name || '';
@@ -1192,6 +1423,10 @@ function coerceCell(f, raw) {
       if (['no', 'n', 'false', '0'].includes(v)) return { value: false };
       return { error: `${f.l} must be yes or no` };
     }
+    case 'cselect': {
+      const hit = f.opts.find((o) => o.toLowerCase() === s.toLowerCase());
+      return hit ? { value: hit } : { error: `${f.l} must be one of: ${f.opts.join(', ')}` };
+    }
     case 'select': {
       const v = s.toLowerCase();
       return f.opts.includes(v) ? { value: v } : { error: `${f.l} must be one of: ${f.opts.join(', ')}` };
@@ -1224,9 +1459,9 @@ function planImport(key, table) {
       if (!f) return;
       const r = coerceCell(f, cells[c]);
       if (r.error) problems.push(`Row ${i + 2}: ${r.error}`);
-      else if (!r.skip) out[f.k] = r.value;
+      else if (!r.skip) { if (f.cf) { out.custom = out.custom || {}; out.custom[f.cf] = r.value; } else out[f.k] = r.value; }
     });
-    for (const f of ent.fields.filter((x) => x.req)) if (mappedKeys.includes(f.k) && out[f.k] === undefined && !problems.some((p) => p.startsWith(`Row ${i + 2}:`))) problems.push(`Row ${i + 2}: ${f.l} is empty`);
+    for (const f of ent.fields.filter((x) => x.req)) if (mappedKeys.includes(f.k) && (f.cf ? out.custom?.[f.cf] : out[f.k]) === undefined && !problems.some((p) => p.startsWith(`Row ${i + 2}:`))) problems.push(`Row ${i + 2}: ${f.l} is empty`);
     rows.push(out);
   });
   return { map, head, rows, problems };
@@ -1284,7 +1519,8 @@ const relatedLink = (a, names) => {
   return null;
 };
 async function viewTasks() {
-  const mine = await listAll(`/activities?type=task&owner_user_id=${me.user.id}`);
+  // Tasks, plus any call, meeting or email that has a due date (those are things to do too).
+  const mine = (await listAll(`/activities?owner_user_id=${me.user.id}`)).filter((a) => a.type === 'task' || (a.due_at && a.type !== 'note'));
   const names = { cases: new Map(), deals: new Map() };
   const [cs, ds] = await Promise.all([
     mine.some((a) => a.case_id) && can('case', 'read') ? listAll('/cases') : [],
@@ -1305,6 +1541,7 @@ async function viewTasks() {
           } catch (err) { toast(errText(err), true); e.target.checked = !e.target.checked; }
         } }) : null),
       h('td', { style: a.completed_at ? 'text-decoration:line-through;color:var(--muted)' : '' }, a.subject),
+      h('td', {}, h('span', { class: 'pill' }, a.type[0].toUpperCase() + a.type.slice(1))),
       h('td', { class: 'muted' }, rel ? h('a', { href: rel[1] }, rel[2] ? `${rel[0]}: ${rel[2]}` : rel[0]) : ''),
       h('td', {}, a.completed_at ? h('span', { class: 'muted' }, 'done ' + fmtDateTime(a.completed_at)) : a.due_at ? [dueBadge(a.due_at, false), ' ', h('span', { class: 'muted' }, fmtDateTime(a.due_at))] : ''));
   };
@@ -1318,7 +1555,7 @@ async function viewTasks() {
       ['No due date', open.filter((a) => !a.due_at)]];
     const done = mine.filter((a) => a.completed_at).sort((a, b) => b.completed_at.localeCompare(a.completed_at)).slice(0, 30);
     const section = (title, list) => list.length ? h('div', { class: 'card tablewrap', style: 'margin-bottom:14px' },
-      h('div', { style: 'padding:14px 16px 4px' }, h('h2', {}, `${title} (${list.length})`)), h('table', {}, h('tbody', {}, list.map(row)))) : null;
+      h('div', { style: 'padding:14px 16px 4px' }, h('h2', {}, `${title} (${list.length})`)), h('table', {}, h('thead', {}, h('tr', {}, h('th', { style: 'width:28px' }, ''), h('th', {}, 'Task'), h('th', {}, 'Type'), h('th', {}, 'Related to'), h('th', {}, 'Due'))), h('tbody', {}, list.map(row)))) : null;
     body.replaceChildren(...[
       ...groups.map(([t, l]) => section(t, l)),
       open.length ? null : h('div', { class: 'card empty' }, mine.length ? 'You are all caught up.' : 'No tasks yet. Open any account, contact, deal or case, pick Task under Activity, and add one.'),
