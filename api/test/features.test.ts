@@ -388,3 +388,88 @@ describe('my preferences', () => {
     expect((await w.call('GET', '/v1/me/preferences', undefined as any)).status).toBe(401);
   });
 });
+
+// ---------------------------------------------------------------- sign in with Google
+
+describe('sign in with Google', () => {
+  // Starts the sign in the way a browser would, and hands back what the browser would hold on to.
+  async function begin() {
+    const r = await w.app.inject({ method: 'GET', url: '/v1/auth/google/start' });
+    const loc = new URL(r.headers.location as string);
+    const cookie = String(r.headers['set-cookie']).split(';')[0];
+    return { r, loc, cookie, state: loc.searchParams.get('state')!, nonce: loc.searchParams.get('nonce')! };
+  }
+  async function finish(b: Awaited<ReturnType<typeof begin>>, who: Record<string, unknown>, over: { state?: string; cookie?: string } = {}) {
+    const code = JSON.stringify({ nonce: b.nonce, ...who });
+    const r = await w.app.inject({ method: 'GET', url: `/v1/auth/google/callback?code=${encodeURIComponent(code)}&state=${over.state ?? b.state}`, headers: { cookie: over.cookie ?? b.cookie } });
+    return { status: r.statusCode, to: String(r.headers.location ?? ''), cookie: String(r.headers['set-cookie'] ?? '') };
+  }
+
+  it('the sign in page is told which ways in are on', async () => {
+    expect((await w.call('GET', '/v1/auth/config', {})).body).toEqual({ google: true, key: true });
+    const bare = buildApp({ jwtSecret: SECRET });
+    expect(JSON.parse((await bare.inject({ method: 'GET', url: '/v1/auth/config' })).body)).toEqual({ google: false, key: false });
+    expect((await bare.inject({ method: 'GET', url: '/v1/auth/google/start' })).statusCode).toBe(404);
+  });
+  it('start sends the person to Google with a one time state, and keeps a private cookie', async () => {
+    const b = await begin();
+    expect(b.r.statusCode).toBe(302);
+    expect(b.loc.origin + b.loc.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(b.loc.searchParams.get('client_id')).toBe('test-client');
+    expect(b.loc.searchParams.get('redirect_uri')).toBe('https://crm.example.test/v1/auth/google/callback');
+    expect(b.loc.searchParams.get('scope')).toBe('openid email');
+    expect(b.state).toHaveLength(32);
+    const set = String(b.r.headers['set-cookie']);
+    expect(set).toMatch(/HttpOnly/); expect(set).toMatch(/SameSite=Lax/); expect(set).toMatch(/Secure/);
+    expect(set).not.toContain(b.state);                                  // the state is signed inside the cookie, not readable as is
+    expect((await begin()).state).not.toBe(b.state);
+  });
+  it('lets in a person who was invited, turns invited into active, and gives a working token', async () => {
+    const add = await w.call('POST', '/v1/settings/users', A(), { email: 'New.Person@Tenant-A.test', display_name: 'New Person', role_id: (await w.call('GET', '/v1/settings/roles', A())).body.data.find((r: any) => r.name === 'Sales').id });
+    expect(add.body.status).toBe('invited');
+    const out = await finish(await begin(), { email: 'new.person@tenant-a.test' });
+    expect(out.status).toBe(302);
+    expect(out.to).toMatch(/^\/#token=[\w-]+\.[\w-]+\.[\w-]+$/);
+    expect(out.cookie).toMatch(/Max-Age=0/);                             // the one time cookie is cleared
+    const me = await w.call('GET', '/v1/me', { authorization: 'Bearer ' + out.to.slice('/#token='.length) });
+    expect(me.status).toBe(200); expect(me.body.user.email).toBe('new.person@tenant-a.test');
+    const row = (await w.call('GET', '/v1/settings/users', A())).body.data.find((u: any) => u.email === 'new.person@tenant-a.test');
+    expect(row.status).toBe('active'); expect(row.last_login_at).toBeTruthy();
+  });
+  it('matches the email whatever the capital letters', async () => {
+    const out = await finish(await begin(), { email: 'ADMIN@TENANT-A.TEST' });
+    expect(out.to).toMatch(/^\/#token=/);
+  });
+  it('turns away people who were never invited, and people who were turned off', async () => {
+    expect((await finish(await begin(), { email: 'stranger@gmail.com' })).to).toBe('/?login_error=not_invited');
+    const sales = (await w.call('GET', '/v1/settings/users', A())).body.data.find((u: any) => u.email === 'sales@tenant-a.test');
+    await w.call('PATCH', `/v1/settings/users/${sales.id}`, A(), { version: sales.version, status: 'disabled' });
+    expect((await finish(await begin(), { email: 'sales@tenant-a.test' })).to).toBe('/?login_error=disabled');
+    const back = (await w.call('GET', '/v1/settings/users', A())).body.data.find((u: any) => u.id === sales.id);
+    await w.call('PATCH', `/v1/settings/users/${sales.id}`, A(), { version: back.version, status: 'active' });
+  });
+  it('rejects an email Google has not verified', async () => {
+    expect((await finish(await begin(), { email: 'admin@tenant-a.test', email_verified: false })).to).toBe('/?login_error=unverified');
+  });
+  it('rejects a reply meant for another app, an old one, a wrong issuer, or a wrong nonce', async () => {
+    const f = async (x: Record<string, unknown>) => (await finish(await begin(), { email: 'admin@tenant-a.test', ...x })).to;
+    expect(await f({ aud: 'some-other-app' })).toBe('/?login_error=failed');
+    expect(await f({ exp: Math.floor(Date.now() / 1000) - 5 })).toBe('/?login_error=failed');
+    expect(await f({ iss: 'https://evil.example' })).toBe('/?login_error=failed');
+    expect(await f({ nonce: 'not-the-one' })).toBe('/?login_error=failed');
+    expect(await f({ reject: true })).toBe('/?login_error=failed');
+  });
+  it('rejects a callback that did not start here (wrong state, no cookie, forged cookie)', async () => {
+    const b = await begin();
+    expect((await finish(b, { email: 'admin@tenant-a.test' }, { state: 'f'.repeat(32) })).to).toBe('/?login_error=failed');
+    expect((await finish(b, { email: 'admin@tenant-a.test' }, { cookie: 'nope=1' })).to).toBe('/?login_error=failed');
+    expect((await finish(b, { email: 'admin@tenant-a.test' }, { cookie: 'g_oauth=abc.def.ghi' })).to).toBe('/?login_error=failed');
+  });
+  it('treats a cancelled Google screen as cancelled', async () => {
+    const r = await w.app.inject({ method: 'GET', url: '/v1/auth/google/callback?error=access_denied' });
+    expect(r.headers.location).toBe('/?login_error=cancelled');
+  });
+  it('settings tells the page which sign in methods are on', async () => {
+    expect((await w.call('GET', '/v1/settings/workspace', A())).body.signin).toEqual({ google: true, key: true });
+  });
+});

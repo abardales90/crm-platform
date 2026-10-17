@@ -23,13 +23,13 @@ async function otherAdminExists(db: Db, exceptUserId: string) {
   return (r.rowCount ?? 0) > 0;
 }
 
-export function settingsRoutes(app: FastifyInstance, kit: Kit, email: EmailConfig | undefined) {
+export function settingsRoutes(app: FastifyInstance, kit: Kit, email: EmailConfig | undefined, signin: { google: boolean; key: boolean }) {
   const { authed, can } = kit;
 
   app.get('/v1/settings/workspace', async (req) =>
     authed(req, async (db) => {
       const t = (await db.query(`SELECT name, default_currency FROM tenant`)).rows[0];
-      return { name: t.name, default_currency: t.default_currency, email: { configured: !!email, from: email?.from ?? null } };
+      return { name: t.name, default_currency: t.default_currency, email: { configured: !!email, from: email?.from ?? null }, signin };
     }));
 
   app.patch('/v1/settings/workspace', async (req) =>

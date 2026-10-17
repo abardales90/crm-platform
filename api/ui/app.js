@@ -898,7 +898,9 @@ async function viewSettings(tabKey) {
   if (tab === 'people' && can('app_user', 'read')) {
     const wrap = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
     parts.push(card('People', wrap, canEditUsers ? h('button', { class: 'small primary', onclick: () => invite() }, 'Invite someone') : null));
-    parts.push(h('p', { class: 'muted', style: 'margin-top:-6px' }, 'Everyone signs in with the shared access key for now, so only add people you trust with it. Google sign in is the next step.'));
+    parts.push(h('p', { class: 'muted', style: 'margin-top:-6px' }, ws.signin?.google
+      ? 'People sign in with Google, using the email address you add here. Anyone not on this list cannot get in.' + (ws.signin.key ? ' The shared access key still works as a backup, so remove it from Render once you no longer need it.' : '')
+      : 'Everyone signs in with the shared access key for now, so only add people you trust with it. Google sign in is the next step.'));
     let roles = [];
     const draw = async () => {
       const [users, rl] = await Promise.all([api('GET', '/settings/users').then((r) => r.data), can('role', 'read') ? api('GET', '/settings/roles').then((r) => r.data) : []]);
@@ -1010,7 +1012,16 @@ async function welcome() {
 }
 
 // ---------- shell, sign in, routing ----------
-function renderLogin(msg) {
+const LOGIN_ERRORS = {
+  not_invited: 'That Google account has not been added to this CRM yet. Ask an admin to add your email under Settings, People.',
+  disabled: 'This account has been turned off. Ask an admin to turn it back on.',
+  unverified: 'Google says that email address is not verified, so it cannot be used to sign in.',
+  cancelled: 'Google sign in was cancelled.',
+  failed: 'Google sign in did not work. Please try again.',
+};
+
+async function renderLogin(msg) {
+  const cfg = await fetch('/v1/auth/config').then((r) => r.json()).catch(() => ({ google: false, key: true }));
   const err = h('div', { class: 'banner', hidden: !msg }, msg || '');
   const email = h('input', { type: 'email', autocomplete: 'username', placeholder: 'you@example.com' });
   const key = h('input', { type: 'password', autocomplete: 'current-password', placeholder: 'Your access key' });
@@ -1033,9 +1044,8 @@ function renderLogin(msg) {
   };
   const btn = h('button', { class: 'primary', type: 'submit' }, 'Sign in');
   const pasted = h('textarea', { placeholder: 'Paste an access token', spellcheck: 'false' });
-  $('#app').replaceChildren(h('div', { class: 'login' },
-    h('div', { class: 'brand', style: 'padding-left:0' }, h('i'), 'CRM'),
-    h('form', { class: 'card', onsubmit: go }, h('h1', { style: 'margin-bottom:12px' }, 'Sign in'), err,
+  const keyForm = h('div', {},
+    h('form', { class: 'card', onsubmit: go }, h('h1', { style: 'margin-bottom:12px' }, cfg.google ? 'Use the access key' : 'Sign in'), cfg.google ? null : err,
       h('div', { class: 'grid2', style: 'grid-template-columns:1fr' },
         h('label', { class: 'f' }, h('span', {}, 'Email'), email), h('label', { class: 'f' }, h('span', {}, 'Access key'), key)),
       h('div', { class: 'actions' }, btn)),
@@ -1043,7 +1053,18 @@ function renderLogin(msg) {
       h('div', { style: 'margin-top:8px' }, pasted, h('div', { class: 'actions' }, h('button', { type: 'button', onclick: async () => {
         const t = pasted.value.trim().replace(/^Bearer\s+/i, ''); if (!t) return pasted.focus();
         try { await enter(t); } catch (x) { fail(x.status === 401 ? 'That token was not accepted. It may have expired.' : errText(x)); }
-      } }, 'Use token'))))));
+      } }, 'Use token')))));
+  const googleCard = () => h('div', { class: 'card' }, h('h1', { style: 'margin-bottom:12px' }, 'Sign in'), err,
+    h('a', { class: 'btn primary wide', href: '/v1/auth/google/start' }, 'Sign in with Google'),
+    h('p', { class: 'muted', style: 'margin:12px 0 0' }, 'Use the Google account for the email address you were invited with.'));
+  // Built only when needed: an element can sit in one place, and err is shared by whichever card is shown.
+  const nothing = () => h('div', { class: 'card' }, h('h1', { style: 'margin-bottom:12px' }, 'Sign in'), err, h('p', { class: 'muted', style: 'margin:0' }, 'No way to sign in is turned on for this server yet.'));
+  $('#app').replaceChildren(h('div', { class: 'login' },
+    h('div', { class: 'brand', style: 'padding-left:0' }, h('i'), 'CRM'),
+    cfg.google ? googleCard() : null,
+    cfg.google && cfg.key ? h('details', { style: 'margin-top:12px' }, h('summary', { class: 'muted' }, 'Use the shared access key instead'), h('div', { style: 'margin-top:8px' }, keyForm)) : null,
+    !cfg.google && cfg.key ? keyForm : null,
+    !cfg.google && !cfg.key ? nothing() : null));
 }
 function signOut() { token = ''; me = null; prefs = { accent: null, tour_done_at: null, last_seen_release: null }; localStorage.removeItem(TOKEN_KEY); renderLogin(); }
 
@@ -1098,4 +1119,9 @@ async function boot() {
   welcome();
 }
 window.addEventListener('hashchange', route);
-if (token) boot().catch(() => renderLogin()); else renderLogin();
+// Coming back from Google: the address carries a new sign in token after the #, or a short reason after ?login_error=
+const back = /^#token=([\w.-]+)$/.exec(location.hash);
+const backError = new URLSearchParams(location.search).get('login_error');
+if (back) { token = back[1]; try { localStorage.setItem(TOKEN_KEY, token); } catch { /* private window: signed in until reload */ } }
+if (back || backError) history.replaceState(null, '', location.pathname);
+if (token) boot().catch(() => renderLogin()); else renderLogin(backError ? (LOGIN_ERRORS[backError] || LOGIN_ERRORS.failed) : undefined);

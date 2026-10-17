@@ -64,3 +64,14 @@ read the login key on the service's Environment tab. Sign in with your tenant ad
 Migrations live in api/migrations. If the environment variable MIGRATE_DATABASE_URL is set, the app applies any new migration files when it starts, each in its own transaction, and stops (leaving the old version running on Render) if one fails.
 
 MIGRATE_DATABASE_URL must be a login that can change the database, such as the Neon owner login. Keep DATABASE_URL as the limited crm_api login.
+
+## Sign in with Google
+
+Optional. Turn it on in Render, Environment tab:
+- GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET: from a Web application client in Google Auth Platform
+- PUBLIC_URL: the site address, for example https://crm-w12f.onrender.com (no slash at the end)
+- SANDBOX_TENANT_ID must also be set. It names the workspace people sign in to.
+
+The redirect URI to register in Google is PUBLIC_URL followed by /v1/auth/google/callback.
+
+Only people already listed under Settings, People can sign in. Google proves who they are. The People list decides who may enter. Once Google works, remove SANDBOX_LOGIN_KEY in Render to switch off the shared access key.

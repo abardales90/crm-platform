@@ -193,3 +193,9 @@ nav.side a.item.tourhl, a.gear.tourhl { outline: 2px solid var(--accent); outlin
 .release h3 { margin: 0 0 2px; font-size: 15px; } .release .when { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
 .release ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
 .release .tag { font-size: 11px; font-weight: 650; padding: 1px 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); margin-left: 6px; vertical-align: middle; }
+
+a.btn { display: inline-block; text-decoration: none; text-align: center; }
+a.btn:hover { text-decoration: none; background: var(--bg); }
+a.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+a.btn.primary:hover { filter: brightness(1.07); background: var(--accent); }
+a.btn.wide { display: block; padding: 10px 12px; }

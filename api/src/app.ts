@@ -10,6 +10,7 @@ import { reportRoutes } from './reports.js';
 import { settingsRoutes } from './settings.js';
 import { caseMailRoutes } from './mail.js';
 import { prefRoutes } from './prefs.js';
+import { googleRoutes, type GoogleConfig } from './google.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const q = (c: string) => `"${c}"`; // column names only ever come from the schema whitelist
@@ -20,6 +21,7 @@ export function buildApp(opts: {
   jwtSecret: string; logger?: boolean; uiDir?: string; trustProxy?: boolean;
   sandboxLogin?: { key: string; tenantId: string };
   email?: EmailConfig;
+  google?: GoogleConfig;
 }) {
   const app = Fastify({ logger: opts.logger ?? false, genReqId: () => randomUUID(), trustProxy: opts.trustProxy ?? false });
 
@@ -108,6 +110,10 @@ export function buildApp(opts: {
     return reply.send({ token: signToken(opts.jwtSecret, { tenantId: cfg.tenantId, userId: user.id }, 12 * 3600) });
   });
 
+  // Tells the sign in page which ways in are turned on.
+  app.get('/v1/auth/config', async () => ({ google: !!opts.google, key: !!opts.sandboxLogin }));
+  googleRoutes(app, opts.google, opts.jwtSecret);
+
   // Names for owner pickers. Any signed in user may see who is in their own tenant.
   app.get('/v1/users', async (req) =>
     authed(req, async (db) => {
@@ -131,7 +137,7 @@ export function buildApp(opts: {
 
   const kit = { authed, can };
   reportRoutes(app, kit);
-  settingsRoutes(app, kit, opts.email);
+  settingsRoutes(app, kit, opts.email, { google: !!opts.google, key: !!opts.sandboxLogin });
   caseMailRoutes(app, kit, opts.email);
   prefRoutes(app, kit);
 

@@ -15,6 +15,7 @@ initPool(config.databaseUrl);
 const app = buildApp({
   jwtSecret: config.jwtSecret, logger: true, trustProxy: true,
   sandboxLogin: config.sandboxLoginKey ? { key: config.sandboxLoginKey, tenantId: config.sandboxTenantId } : undefined,
+  google: config.googleClientId ? { clientId: config.googleClientId, clientSecret: config.googleClientSecret, tenantId: config.sandboxTenantId, publicUrl: config.publicUrl || undefined } : undefined,
   email: config.resendApiKey ? { send: resendSender(config.resendApiKey), from: config.emailFrom, replyTo: config.emailReplyTo || undefined } : undefined,
   uiDir: fileURLToPath(new URL('../ui', import.meta.url)),
 });

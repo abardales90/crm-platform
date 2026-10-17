@@ -60,7 +60,10 @@ export async function setup() {
 
   initPool(dbUrl('api_test_login'));
   const app = buildApp({ jwtSecret: SECRET, sandboxLogin: { key: LOGIN_KEY, tenantId: tenants.a.id },
-    email: { send: fakeSend, from: 'Support <support@example.test>' } });
+    email: { send: fakeSend, from: 'Support <support@example.test>' },
+    google: { clientId: 'test-client', clientSecret: 'test-secret', tenantId: tenants.a.id, publicUrl: 'https://crm.example.test',
+      // The test "code" is a JSON note of what Google would say about the person. Everything else is checked by the real code.
+      exchange: async (code) => { const c = JSON.parse(code); if (c.reject) throw new Error('rejected'); return { iss: 'https://accounts.google.com', aud: 'test-client', exp: Math.floor(Date.now() / 1000) + 600, email_verified: true, ...c }; } } });
   await app.ready();
 
   const as = (t: 'a' | 'b', user: string) => ({ authorization: `Bearer ${signToken(SECRET, { tenantId: tenants[t].id, userId: tenants[t].users[user] })}` });
