@@ -240,3 +240,25 @@ describe('bulk import', () => {
     expect((await w.call('POST', '/v1/accounts/import', {}, { rows: [{ name: 'x' }] })).status).toBe(401);
   });
 });
+
+describe('screen files', () => {
+  it('are always checked for a newer copy, so an update shows up on the next visit', async () => {
+    const r = await w.app.inject({ method: 'GET', url: '/health' });
+    expect(r.statusCode).toBe(200); // the shared test app serves no screens, so build one that does
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { buildApp } = await import('../src/app.js');
+    const dir = mkdtempSync(join(tmpdir(), 'ui-'));
+    writeFileSync(join(dir, 'app.js'), 'console.log(1)');
+    const ui = buildApp({ jwtSecret: 'x'.repeat(40), uiDir: dir });
+    await ui.ready();
+    const first = await ui.inject({ method: 'GET', url: '/app.js' });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers['cache-control']).toBe('no-cache');
+    expect(first.headers.etag).toBeTruthy();
+    const again = await ui.inject({ method: 'GET', url: '/app.js', headers: { 'if-none-match': String(first.headers.etag) } });
+    expect(again.statusCode).toBe(304);
+    await ui.close();
+  });
+});

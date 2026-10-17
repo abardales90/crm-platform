@@ -82,7 +82,9 @@ export function buildApp(opts: {
   }
 
   if (opts.uiDir) {
-    app.register(fastifyStatic, { root: opts.uiDir, prefix: '/', cacheControl: true, maxAge: '5m' });
+    // no-cache means: keep a copy, but ask the server on every visit whether it is still the newest. Updates show up at once, and an unchanged file costs almost nothing.
+    app.register(fastifyStatic, { root: opts.uiDir, prefix: '/', cacheControl: false, etag: true, lastModified: true,
+      setHeaders: (res) => { res.setHeader('Cache-Control', 'no-cache'); } });
   }
 
   app.get('/health', async () => ({ ok: true }));
