@@ -4,7 +4,14 @@ const TOKEN_KEY = 'crm_token';
 let token = localStorage.getItem(TOKEN_KEY) || '';
 let me = null; // { user, permissions }
 let signingIn = false; // while true, a 401 means 'bad token', not 'session expired'
-const cache = { users: [], stages: [], queues: [], accounts: [], contacts: [] };
+const cache = { users: [], stages: [], queues: [], accounts: [], contacts: [], workspace: null };
+
+// ---------- theme: match the device, or force light or dark ----------
+const THEME_KEY = 'crm_theme';
+function getTheme() { try { return localStorage.getItem(THEME_KEY) || 'system'; } catch { return 'system'; } }
+function applyTheme(t) { if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; }
+function setTheme(t) { try { localStorage.setItem(THEME_KEY, t); } catch { /* private window: the choice lasts until reload */ } applyTheme(t); }
+applyTheme(getTheme());
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...kids) {
@@ -140,7 +147,7 @@ const ENT = {
       { k: 'owner_user_id', l: 'Owner', t: 'user', create: true },
       { k: 'description', l: 'Notes', t: 'textarea', wide: true },
     ],
-    cols: [['name', 'Name'], ['domain', 'Domain'], ['type', 'Type'], ['health_score', 'Health', 'health'], ['renewal_date', 'Renewal', 'date'], ['owner_user_id', 'Owner', 'user']],
+    cols: [['name', 'Name'], ['domain', 'Domain'], ['type', 'Type', 'enum'], ['health_score', 'Health', 'health'], ['renewal_date', 'Renewal', 'date'], ['owner_user_id', 'Owner', 'user']],
   },
   contacts: {
     path: 'contacts', perm: 'contact', label: 'Contacts', one: 'Contact', title: (r) => [r.first_name, r.last_name].filter(Boolean).join(' '),
@@ -202,7 +209,9 @@ function selectOf(options, value, { blank = true } = {}) {
 }
 // Sensible starting values for the New dialogs.
 const CREATE_DEFAULTS = { priority: 'normal', status: 'new' };
-const optList = (arr) => arr.map((x) => [x, x]);
+// Stored values stay lowercase in the database. Screens show them in Title Case.
+const cap = (s) => s == null ? '' : String(s).replace(/\b[a-z]/g, (c) => c.toUpperCase());
+const optList = (arr) => arr.map((x) => [x, cap(x)]);
 
 function control(f, rec) {
   let v = rec ? rec[f.k] : undefined;
@@ -264,13 +273,15 @@ function makeForm(fields, rec, { disabled } = {}) {
 }
 
 async function loadRefs() {
-  const [users, stages, queues, accounts, contacts] = await Promise.all([
+  const [users, stages, queues, accounts, contacts, workspace] = await Promise.all([
     api('GET', '/users').then((r) => r.data),
     api('GET', '/pipeline-stages').then((r) => r.data).catch(() => []),
     api('GET', '/queues').then((r) => r.data).catch(() => []),
     can('account', 'read') ? listAll('/accounts') : [],
     can('contact', 'read') ? listAll('/contacts') : [],
+    api('GET', '/settings/workspace').catch(() => null),
   ]);
+  cache.workspace = workspace;
   cache.users = users;
   cache.stages = stages.sort((a, b) => a.sort_order - b.sort_order);
   cache.queues = queues.filter((q) => q.is_active !== false);
@@ -291,8 +302,9 @@ function cell(col, r) {
     case 'account': { const a = cache.accounts.find((x) => x.id === r[k]); return a ? h('a', { href: '#/accounts/' + a.id, onclick: (e) => e.stopPropagation() }, a.name) : ''; }
     case 'contactname': return ENT.contacts.title(r);
     case 'health': return r[k] == null ? '' : h('span', { class: 'pill ' + (r[k] < 40 ? 'bad' : r[k] < 70 ? 'warn' : 'ok') }, r[k]);
-    case 'status': return h('span', { class: 'pill ' + (['solved', 'closed'].includes(r[k]) ? 'ok' : r[k] === 'escalated' ? 'bad' : '') }, r[k]);
-    case 'priority': return h('span', { class: 'pill ' + (r[k] === 'urgent' ? 'bad' : r[k] === 'high' ? 'warn' : '') }, r[k]);
+    case 'enum': return cap(r[k]);
+    case 'status': return h('span', { class: 'pill ' + (['solved', 'closed'].includes(r[k]) ? 'ok' : r[k] === 'escalated' ? 'bad' : '') }, cap(r[k]));
+    case 'priority': return h('span', { class: 'pill ' + (r[k] === 'urgent' ? 'bad' : r[k] === 'high' ? 'warn' : '') }, cap(r[k]));
     case 'sla': return ['solved', 'closed'].includes(r.status) ? '' : dueBadge(r[k], false);
     case 'assignee': return r.owner_user_id ? userName(r.owner_user_id) : (cache.queues.find((q) => q.id === r.queue_id)?.name ? 'Queue: ' + cache.queues.find((q) => q.id === r.queue_id).name : '');
     default: return r[k] ?? '';
@@ -300,8 +312,9 @@ function cell(col, r) {
 }
 
 // ---------- views ----------
+let routeSeq = 0; // bumped on every navigation, so a slow page never paints over a newer one
 const view = () => $('#view');
-function setView(...nodes) { view().replaceChildren(...nodes.flat()); window.scrollTo(0, 0); }
+function setView(...nodes) { view().replaceChildren(...nodes.flat(Infinity).filter((n) => n != null && n !== false)); window.scrollTo(0, 0); }
 
 async function viewHome() {
   const [cases, deals] = await Promise.all([
@@ -467,7 +480,7 @@ async function activitiesPanel(filterKey, id) {
       acts.length ? h('table', {}, h('tbody', {}, acts.map((a) => h('tr', {},
         h('td', { style: 'width:28px' }, a.type === 'task' && can('activity', 'edit') ? h('input', { type: 'checkbox', checked: !!a.completed_at, title: 'Done',
           onchange: async (e) => { try { await api('PATCH', '/activities/' + a.id, { version: a.version, completed_at: e.target.checked ? new Date().toISOString() : null }); await draw(); } catch (err) { toast(errText(err), true); e.target.checked = !e.target.checked; } } }) : null),
-        h('td', {}, h('span', { class: 'pill' }, a.type)),
+        h('td', {}, h('span', { class: 'pill' }, cap(a.type))),
         h('td', { style: a.completed_at ? 'text-decoration:line-through;color:var(--muted)' : '' }, a.subject),
         h('td', { class: 'muted' }, a.due_at ? 'due ' + fmtDateTime(a.due_at) : fmtDateTime(a.created_at)),
         h('td', { class: 'muted' }, userName(a.owner_user_id)))))) : h('div', { class: 'muted' }, 'Nothing logged yet.'));
@@ -478,8 +491,9 @@ async function activitiesPanel(filterKey, id) {
 
 async function viewDetail(key, id) {
   const ent = ENT[key];
+  const seq = routeSeq;
   let rec;
-  try { rec = await api('GET', `/${ent.path}/${id}`); } catch (e) {
+  try { rec = await api('GET', `/${ent.path}/${id}`); if (seq !== routeSeq) return; } catch (e) {
     if (e.status === 404) return setView(h('div', { class: 'card empty' }, `That ${ent.one.toLowerCase()} was not found. It may have been deleted.`, h('div', {}, h('a', { href: '#/' + key }, 'Back to ' + ent.label.toLowerCase()))));
     throw e;
   }
@@ -535,7 +549,7 @@ async function viewDetail(key, id) {
     h('div', { class: 'muted', style: 'margin-top:12px;font-size:12px' }, `Created ${fmtDateTime(rec.created_at)} · Updated ${fmtDateTime(rec.updated_at)} · Version ${rec.version}`)));
   setView(parts);
 
-  const add = (node) => view().append(node);
+  const add = (node) => { if (seq === routeSeq) view().append(node); };
   if (key === 'accounts') {
     const [contacts, deals, cases] = await Promise.all([
       can('contact', 'read') ? listAll('/contacts?account_id=' + id) : [], can('opportunity', 'read') ? listAll('/opportunities?account_id=' + id) : [], can('case', 'read') ? listAll('/cases?account_id=' + id) : []]);
@@ -565,7 +579,10 @@ async function viewDetail(key, id) {
 }
 
 async function commentsPanel(rec) {
-  const comments = await listAll('/case-comments?case_id=' + rec.id);
+  const [comments, emails] = await Promise.all([
+    listAll('/case-comments?case_id=' + rec.id),
+    can('case', 'read') ? api('GET', `/cases/${rec.id}/emails`).then((r) => r.data).catch(() => []) : [],
+  ]);
   const thread = h('div', { class: 'thread' }, comments.length ? comments.map((c) => {
     const customer = !c.author_user_id;
     return h('div', { class: 'msg ' + (!c.is_public ? 'internal' : customer ? 'customer' : '') },
@@ -574,18 +591,315 @@ async function commentsPanel(rec) {
   }) : h('div', { class: 'muted' }, 'No messages yet.'));
   let composer = null;
   if (can('case_comment', 'create')) {
-    const mode = selectOf([['public', 'Reply to customer'], ['internal', 'Internal note'], ['customer', 'Customer wrote in']], 'public', { blank: false });
+    const contact = cache.contacts.find((c) => c.id === rec.contact_id);
+    const emailOn = !!cache.workspace?.email?.configured;
+    const emailOk = emailOn && !!contact?.email && !contact.do_not_contact && can('contact', 'read');
+    const modes = [];
+    if (emailOk) modes.push(['email', `Reply by email to ${ENT.contacts.title(contact)}`]);
+    modes.push(['public', emailOk ? 'Post a reply without emailing' : 'Reply to customer (not emailed)'], ['internal', 'Internal note'], ['customer', 'Customer wrote in']);
+    const mode = selectOf(modes, modes[0][0], { blank: false });
     const body = h('textarea', { placeholder: 'Write a message' });
+    const subject = h('input', { type: 'text', value: `Re: [Case #${rec.case_number}] ${rec.subject}` });
+    const after = selectOf(optList(OPTS.caseStatus), ['new', 'open'].includes(rec.status) ? 'pending customer' : rec.status, { blank: false });
+    const emailRow = h('div', { class: 'inline', style: 'margin-top:8px;align-items:flex-end' },
+      h('label', { class: 'f', style: 'flex:1;min-width:220px' }, h('span', {}, 'Subject'), subject),
+      can('case', 'edit') ? h('label', { class: 'f' }, h('span', {}, 'Then set the case to'), after) : null);
     const send = h('button', { class: 'primary', onclick: async (e) => {
       if (!body.value.trim()) return body.focus();
       e.target.disabled = true;
-      const payload = { case_id: rec.id, body: body.value.trim(), is_public: mode.value !== 'internal' };
-      if (mode.value !== 'customer') payload.author_user_id = me.user.id;
-      try { await api('POST', '/case-comments', payload); toast('Sent'); await viewDetail('cases', rec.id); } catch (err) { toast(errText(err), true); e.target.disabled = false; }
-    } }, 'Send');
-    composer = h('div', { style: 'margin-top:12px' }, body, h('div', { class: 'inline', style: 'margin-top:8px' }, mode, send));
+      try {
+        if (mode.value === 'email') {
+          await api('POST', `/cases/${rec.id}/reply`, { body: body.value.trim(), subject: subject.value.trim(), ...(can('case', 'edit') ? { status: after.value } : {}) });
+          toast('Email sent to ' + contact.email);
+        } else {
+          const payload = { case_id: rec.id, body: body.value.trim(), is_public: mode.value !== 'internal' };
+          if (mode.value !== 'customer') payload.author_user_id = me.user.id;
+          await api('POST', '/case-comments', payload);
+          toast('Saved');
+        }
+        await viewDetail('cases', rec.id);
+      } catch (err) { toast(errText(err), true); e.target.disabled = false; }
+    } }, modes[0][0] === 'email' ? 'Send email' : 'Send');
+    const sync = () => { const em = mode.value === 'email'; emailRow.hidden = !em; send.textContent = em ? 'Send email' : mode.value === 'internal' ? 'Add note' : 'Save'; };
+    mode.addEventListener('change', sync);
+    sync();
+    const why = emailOk ? null
+      : !emailOn ? 'Email is not set up yet. Turn it on in Settings to reply from here.'
+      : !rec.contact_id ? 'Add a contact with an email address to reply by email.'
+      : !contact?.email ? 'This contact has no email address, so a reply cannot be emailed.'
+      : contact.do_not_contact ? 'This contact is marked Do Not Contact.' : null;
+    composer = h('div', { style: 'margin-top:12px' }, body, emailRow, h('div', { class: 'inline', style: 'margin-top:8px' }, mode, send),
+      why ? h('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' }, why) : null);
   }
-  return related('Conversation', h('div', {}, thread, composer));
+  const emailLog = emails.length ? related('Emails sent', h('div', { class: 'tablewrap' }, h('table', {}, h('tbody', {}, emails.map((m) => h('tr', {},
+    h('td', { class: 'muted' }, fmtDateTime(m.sent_at || m.created_at)), h('td', {}, m.to_email), h('td', {}, m.subject),
+    h('td', {}, h('span', { class: 'pill ' + (m.status === 'sent' ? 'ok' : m.status === 'failed' ? 'bad' : ''), title: m.error || null }, cap(m.status)))))))))
+    : null;
+  return h('div', {}, related('Conversation', h('div', {}, thread, composer)), emailLog);
+}
+
+// ---------- small shared pieces ----------
+const nf = new Intl.NumberFormat();
+const fmtDay = (iso) => { const [y, m, d] = String(iso).slice(0, 10).split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+const fmtMonth = (iso) => { const [y, m] = String(iso).slice(0, 10).split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }); };
+const minutesText = (m) => m == null ? 'None yet' : m < 90 ? `${m} min` : m < 2880 ? `${Math.round(m / 6) / 10} hours` : `${Math.round(m / 144) / 10} days`;
+const pctText = (v) => v == null ? 'None yet' : v + '%';
+const tile = (n, label, note) => h('div', { class: 'stat' }, h('div', { class: 'n' }, n), h('div', { class: 'l' }, label), note ? h('div', { class: 'l' }, note) : null);
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svg(tag, attrs, ...kids) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) e.setAttribute(k, v);
+  for (const kid of kids.flat()) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  return e;
+}
+
+// Saves a table as a CSV file. Text that starts with = + - @ gets a leading quote so a spreadsheet never runs it as a formula.
+function downloadCsv(name, cols, rows) {
+  const esc = (v) => {
+    let s = v == null ? '' : String(v);
+    if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = [cols.map((c) => esc(c[0])).join(','), ...rows.map((r) => cols.map((c) => esc(c[1](r))).join(','))];
+  const url = URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+  const a = h('a', { href: url, download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+const csvButton = (name, cols, rows) => rows.length ? h('button', { class: 'small', onclick: () => downloadCsv(name, cols, rows) }, 'Download CSV') : null;
+
+// Horizontal bars. One color, the value at the tip, the hover text carries the detail.
+function barRows(rows, { value, label = (r) => r.label, fmt = (v) => nf.format(v), tip }) {
+  if (!rows.length) return h('div', { class: 'muted' }, 'Nothing to show yet.');
+  const max = Math.max(...rows.map(value), 0) || 1;
+  return h('div', { class: 'bars' }, rows.map((r) => {
+    const v = value(r);
+    return h('div', { class: 'brow', title: tip ? tip(r) : null },
+      h('div', { class: 'bl' }, label(r)),
+      h('div', { class: 'bt' }, h('i', { style: `width:${v > 0 ? Math.max((v / max) * 100, 1.5) : 0}%` })),
+      h('div', { class: 'bv' }, fmt(v)));
+  }));
+}
+
+// Two lines over time. Direct values on hover, a legend underneath, and the numbers are in the CSV.
+function trendChart(points, defs) {
+  const W = 720, H = 240, L = 38, R = 16, T = 12, B = 28;
+  const max = Math.max(1, ...points.flatMap((p) => defs.map((d) => p[d.key])));
+  const top = Math.max(4, Math.ceil(max / 4) * 4);
+  const x = (i) => L + (points.length < 2 ? (W - L - R) / 2 : (i * (W - L - R)) / (points.length - 1));
+  const y = (v) => T + (H - T - B) * (1 - v / top);
+  const step = points.length < 2 ? W - L - R : (W - L - R) / (points.length - 1);
+  const kids = [];
+  for (let i = 0; i <= 4; i++) {
+    const v = (top / 4) * i;
+    kids.push(svg('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), class: 'grid' }), svg('text', { x: L - 8, y: y(v) + 4, class: 'tick', 'text-anchor': 'end' }, nf.format(v)));
+  }
+  const labelAt = [0, Math.floor((points.length - 1) / 2), points.length - 1];
+  [...new Set(labelAt)].forEach((i, n, arr) => kids.push(svg('text', { x: x(i), y: H - 8, class: 'tick', 'text-anchor': n === 0 ? 'start' : n === arr.length - 1 ? 'end' : 'middle' }, fmtDay(points[i].bucket))));
+  for (const d of defs) {
+    kids.push(svg('path', { d: points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p[d.key]).toFixed(1)}`).join(' '), class: 'line ' + d.cls }));
+    const last = points.length - 1;
+    kids.push(svg('circle', { cx: x(last), cy: y(points[last][d.key]), r: 4, class: 'dot ' + d.cls }));
+  }
+  points.forEach((p, i) => kids.push(svg('rect', { x: x(i) - step / 2, y: T, width: step, height: H - T - B, class: 'hit' },
+    svg('title', {}, `${fmtDay(p.bucket)}: ${defs.map((d) => `${p[d.key]} ${d.label.toLowerCase()}`).join(', ')}`))));
+  return h('div', {},
+    svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', 'aria-label': defs.map((d) => d.label).join(' and ') + ' over time' }, kids),
+    h('div', { class: 'legend' }, defs.map((d) => h('span', {}, h('i', { class: 'sw ' + d.cls }), d.label))));
+}
+
+const card = (title, body, action) => h('div', { class: 'card' }, h('div', { class: 'sectionhead' }, h('h2', {}, title), action || null), body);
+function tableCard(title, cols, rows, csvName, empty) {
+  const body = rows.length
+    ? h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, cols.map((c) => h('th', {}, c[0])))),
+        h('tbody', {}, rows.map((r) => h('tr', {}, cols.map((c) => h('td', {}, c[2] ? c[2](r) : c[1](r))))))))
+    : h('div', { class: 'muted' }, empty || 'Nothing to show yet.');
+  return card(title, body, csvButton(csvName, cols, rows));
+}
+
+// ---------- reports ----------
+let reportDays = 30;
+const RANGES = [[7, 'Last 7 days'], [30, 'Last 30 days'], [90, 'Last 90 days'], [365, 'Last 12 months']];
+
+async function reportSupport() {
+  const r = await api('GET', '/reports/support?days=' + reportDays);
+  const t = r.totals;
+  const per = r.unit === 'week' ? 'week' : 'day';
+  return [
+    h('div', { class: 'stats' },
+      tile(nf.format(t.opened), 'Cases opened'), tile(nf.format(t.solved), 'Cases solved'),
+      tile(nf.format(t.open_now), 'Open right now'), tile(nf.format(t.past_sla_now), 'Open and past an SLA target'),
+      tile(pctText(t.first_response_met_pct), 'First response on time', 'Cases opened in this period'),
+      tile(pctText(t.resolution_met_pct), 'Resolved on time', 'Cases opened in this period'),
+      tile(minutesText(t.avg_first_response_minutes), 'Average first response'), tile(t.avg_resolution_hours == null ? 'None yet' : `${t.avg_resolution_hours} hours`, 'Average time to resolve')),
+    card(`Opened and solved, by ${per}`, r.series.some((p) => p.opened || p.solved)
+      ? trendChart(r.series, [{ key: 'opened', label: 'Opened', cls: 's1' }, { key: 'solved', label: 'Solved', cls: 's2' }])
+      : h('div', { class: 'muted' }, 'No cases in this period.'),
+      csvButton('cases-by-' + per + '.csv', [[per === 'week' ? 'Week starting' : 'Date', (p) => p.bucket], ['Opened', (p) => p.opened], ['Solved', (p) => p.solved]], r.series)),
+    h('div', { class: 'cols2' },
+      card('Opened, by priority', barRows(r.by_priority, { value: (x) => x.n, label: (x) => cap(x.label) })),
+      card('Open cases, by status', barRows(r.by_status, { value: (x) => x.n, label: (x) => cap(x.label) }))),
+    card('Open cases, by assignee', barRows(r.open_by_assignee, { value: (x) => x.n })),
+  ];
+}
+
+async function reportPipeline() {
+  const r = await api('GET', '/reports/pipeline?days=' + reportDays);
+  const c = r.closed;
+  return [
+    h('div', { class: 'stats' },
+      tile(money(r.open.amount) || '$0', 'Open pipeline', `${r.open.count} open ${r.open.count === 1 ? 'deal' : 'deals'}`),
+      tile(money(r.open.weighted) || '$0', 'Weighted pipeline', 'Amount times probability'),
+      tile(`${c.won_count} won`, money(c.won_amount) || '$0', 'By close date, this period'),
+      tile(`${c.lost_count} lost`, money(c.lost_amount) || '$0', 'By close date, this period'),
+      tile(pctText(c.win_rate_pct), 'Win rate', 'Won out of won and lost'),
+      tile(c.avg_won_size == null ? 'None yet' : money(c.avg_won_size), 'Average deal won')),
+    h('div', { class: 'cols2' },
+      card('Open pipeline, by stage', barRows(r.open_by_stage, { value: (x) => x.amount, fmt: (v) => money(v) || '$0', tip: (x) => `${x.n} deals, ${money(x.weighted) || '$0'} weighted` }),
+        csvButton('pipeline-by-stage.csv', [['Stage', (x) => x.label], ['Deals', (x) => x.n], ['Amount', (x) => x.amount], ['Weighted', (x) => x.weighted]], r.open_by_stage)),
+      card('Expected close, by month', barRows(r.forecast_by_month, { value: (x) => x.amount, fmt: (v) => money(v) || '$0',
+        label: (x) => x.past_due ? `${fmtMonth(x.month)} (past due)` : fmtMonth(x.month), tip: (x) => `${x.n} deals, ${money(x.weighted) || '$0'} weighted` }),
+        csvButton('forecast-by-month.csv', [['Month', (x) => x.month.slice(0, 7)], ['Deals', (x) => x.n], ['Amount', (x) => x.amount], ['Weighted', (x) => x.weighted]], r.forecast_by_month))),
+    h('div', { class: 'cols2' },
+      card('Open pipeline, by owner', barRows(r.open_by_owner, { value: (x) => x.amount, fmt: (v) => money(v) || '$0', tip: (x) => `${x.n} deals, ${money(x.weighted) || '$0'} weighted` })),
+      card('Why deals were lost', barRows(r.loss_reasons, { value: (x) => x.n }))),
+    tableCard('Biggest open deals',
+      [['Deal', (d) => d.name, (d) => h('a', { href: '#/deals/' + d.id }, d.name)], ['Account', (d) => d.account || ''], ['Stage', (d) => d.stage], ['Amount', (d) => d.amount, (d) => money(d.amount)], ['Expected close', (d) => d.close_date, (d) => fmtDate(d.close_date)]],
+      r.top_open_deals, 'biggest-open-deals.csv', 'No open deals.'),
+  ];
+}
+
+async function reportAccounts() {
+  const r = await api('GET', '/reports/accounts');
+  const t = r.totals;
+  const ownerCol = ['Owner', (a) => a.owner || ''];
+  return [
+    h('div', { class: 'stats' },
+      tile(nf.format(t.total), 'Accounts'), tile(nf.format(t.customers), 'Customers'),
+      tile(t.avg_health == null ? 'None yet' : t.avg_health, 'Average health score'),
+      tile(nf.format(t.at_risk), 'At risk (health under 40)'),
+      tile(nf.format(r.customer_renewals_past_due), 'Customer renewals past due'),
+      tile(nf.format(r.renewals_next_90_days.length), 'Renewals in the next 90 days')),
+    h('div', { class: 'cols2' },
+      card('Accounts, by health', barRows(r.health, { value: (x) => x.n })),
+      card('Accounts, by type', barRows(r.by_type, { value: (x) => x.n, label: (x) => cap(x.label) }))),
+    tableCard('At risk accounts',
+      [['Account', (a) => a.name, (a) => h('a', { href: '#/accounts/' + a.id }, a.name)], ['Health', (a) => a.health_score, (a) => h('span', { class: 'pill bad' }, a.health_score)], ['Renewal', (a) => a.renewal_date || '', (a) => fmtDate(a.renewal_date)], ownerCol],
+      r.at_risk, 'at-risk-accounts.csv', 'No accounts are at risk.'),
+    tableCard('Renewals in the next 90 days',
+      [['Account', (a) => a.name, (a) => h('a', { href: '#/accounts/' + a.id }, a.name)], ['Renewal', (a) => a.renewal_date, (a) => fmtDate(a.renewal_date)], ['Days left', (a) => a.days_left],
+       ['Health', (a) => a.health_score ?? '', (a) => a.health_score == null ? '' : h('span', { class: 'pill ' + (a.health_score < 40 ? 'bad' : a.health_score < 70 ? 'warn' : 'ok') }, a.health_score)], ownerCol],
+      r.renewals_next_90_days, 'renewals-next-90-days.csv', 'No renewals in the next 90 days.'),
+  ];
+}
+
+const REPORT_TABS = [
+  ['support', 'Support', () => can('case', 'read'), reportSupport, true],
+  ['pipeline', 'Sales pipeline', () => can('opportunity', 'read'), reportPipeline, true],
+  ['accounts', 'Accounts and renewals', () => can('account', 'read'), reportAccounts, false],
+];
+
+async function viewReports(tabKey) {
+  const tabs = REPORT_TABS.filter((t) => t[2]());
+  if (!tabs.length) return setView(h('div', { class: 'card empty' }, 'Your role does not include any reports.'));
+  const tab = tabs.find((t) => t[0] === tabKey) || tabs[0];
+  const body = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+  const range = selectOf(RANGES, String(reportDays), { blank: false });
+  range.value = String(reportDays);
+  if (range.selectedIndex < 0) range.selectedIndex = 1;
+  range.addEventListener('change', () => { reportDays = Number(range.value); draw(); });
+  async function draw() {
+    body.replaceChildren(h('div', { class: 'muted' }, 'Loading…'));
+    try { body.replaceChildren(...(await tab[3]())); }
+    catch (e) { if (e.status === 401) return; body.replaceChildren(h('div', { class: 'banner' }, errText(e))); }
+  }
+  setView(
+    h('div', { class: 'head' }, h('h1', {}, 'Reports'), h('div', { class: 'tools' }, tab[4] ? range : null)),
+    h('div', { class: 'tabs' }, tabs.map((t) => h('a', { class: 'tab' + (t === tab ? ' on' : ''), href: '#/reports/' + t[0] }, t[1]))),
+    body);
+  await draw();
+}
+
+// ---------- settings ----------
+const THEMES = [['system', 'Match my device'], ['light', 'Light'], ['dark', 'Dark']];
+const STATUS_LABEL = { active: 'Active', invited: 'Invited', disabled: 'Turned off' };
+
+async function viewSettings() {
+  const ws = cache.workspace || { name: '', email: { configured: false } };
+  const canEditUsers = can('app_user', 'edit');
+  const parts = [h('div', { class: 'head' }, h('h1', {}, 'Settings'))];
+
+  // appearance
+  const cur = getTheme();
+  parts.push(card('Appearance', h('div', { class: 'radios' }, THEMES.map(([v, l]) =>
+    h('label', { class: 'radio' }, h('input', { type: 'radio', name: 'theme', value: v, checked: v === cur, onchange: () => setTheme(v) }), l)))));
+
+  // workspace
+  const nameInput = h('input', { type: 'text', value: ws.name, disabled: !canEditUsers });
+  const saveName = h('button', { class: 'primary', onclick: async (e) => {
+    e.target.disabled = true;
+    try { const r = await api('PATCH', '/settings/workspace', { name: nameInput.value }); cache.workspace = { ...ws, name: r.name }; toast('Saved'); }
+    catch (err) { toast(errText(err), true); }
+    e.target.disabled = false;
+  } }, 'Save');
+  parts.push(card('Workspace', h('div', { class: 'inline' }, h('label', { class: 'f', style: 'flex:1;min-width:220px' }, h('span', {}, 'Workspace name'), nameInput), canEditUsers ? saveName : null)));
+
+  // email
+  const emailBody = ws.email.configured
+    ? h('div', {}, h('p', { style: 'margin-top:0' }, 'Email is on. Replies on a case go out from ', h('b', {}, ws.email.from), '.'),
+        canEditUsers ? h('button', { onclick: async (e) => {
+          e.target.disabled = true;
+          try { const r = await api('POST', '/settings/email-test', {}); toast('Test email sent to ' + r.sent_to); }
+          catch (err) { toast(errText(err), true); }
+          e.target.disabled = false;
+        } }, 'Send me a test email') : null)
+    : h('div', {}, h('p', { style: 'margin-top:0' }, 'Email is not set up yet, so replies cannot be sent from a case.'),
+        h('p', { class: 'muted', style: 'margin-bottom:0' }, 'To turn it on, add two settings in Render under Environment: RESEND_API_KEY and EMAIL_FROM. Then come back here and send yourself a test.'));
+  parts.push(card('Email', emailBody));
+
+  // users
+  if (can('app_user', 'read')) {
+    const wrap = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
+    parts.push(card('People', wrap, canEditUsers ? h('button', { class: 'small primary', onclick: () => invite() }, 'Invite someone') : null));
+    parts.push(h('p', { class: 'muted', style: 'margin-top:-6px' }, 'Everyone signs in with the shared access key for now, so only add people you trust with it. Google sign in is the next step.'));
+    let roles = [];
+    const draw = async () => {
+      const [users, rl] = await Promise.all([api('GET', '/settings/users').then((r) => r.data), can('role', 'read') ? api('GET', '/settings/roles').then((r) => r.data) : []]);
+      roles = rl;
+      wrap.replaceChildren(h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Name', 'Email', 'Role', 'Status', ''].map((x) => h('th', {}, x)))),
+        h('tbody', {}, users.map((u) => {
+          const mine = u.id === me.user.id;
+          const roleCell = canEditUsers && !mine && roles.length
+            ? (() => { const s = selectOf(roles.map((r) => [r.id, r.name]), u.role_id, { blank: false }); s.addEventListener('change', () => patch(u, { role_id: s.value }, s)); return s; })()
+            : (u.role_name || '');
+          return h('tr', {},
+            h('td', {}, u.display_name, mine ? h('span', { class: 'muted' }, ' (you)') : null), h('td', { class: 'muted' }, u.email), h('td', {}, roleCell),
+            h('td', {}, h('span', { class: 'pill ' + (u.status === 'active' ? 'ok' : u.status === 'disabled' ? 'bad' : '') }, STATUS_LABEL[u.status] || u.status)),
+            h('td', { style: 'text-align:right' }, canEditUsers && !mine ? h('button', { class: 'small', onclick: () => patch(u, { status: u.status === 'disabled' ? 'active' : 'disabled' }) }, u.status === 'disabled' ? 'Turn on' : 'Turn off') : null));
+        })))));
+    };
+    async function patch(u, change, control) {
+      try { await api('PATCH', '/settings/users/' + u.id, { version: u.version, ...change }); toast('Saved'); cache.users = (await api('GET', '/users')).data; }
+      catch (e) { toast(errText(e), true); }
+      await draw();
+    }
+    function invite() {
+      const name = h('input', { type: 'text', placeholder: 'Full name' });
+      const email = h('input', { type: 'email', placeholder: 'name@company.com' });
+      const role = selectOf(roles.map((r) => [r.id, r.name]), roles.find((r) => r.name === 'Read Only')?.id, { blank: false });
+      modal('Invite someone', h('div', { class: 'grid2', style: 'grid-template-columns:1fr' },
+        h('label', { class: 'f' }, h('span', {}, 'Name'), name), h('label', { class: 'f' }, h('span', {}, 'Email'), email), h('label', { class: 'f' }, h('span', {}, 'Role'), role)), [
+        { label: 'Cancel' },
+        { label: 'Invite', primary: true, run: async (dlg) => {
+          await api('POST', '/settings/users', { display_name: name.value, email: email.value, role_id: role.value });
+          dlg.close(); toast('Added'); cache.users = (await api('GET', '/users')).data; await draw();
+        } },
+      ]);
+    }
+    draw().catch((e) => wrap.replaceChildren(h('div', { class: 'banner' }, errText(e))));
+  }
+  setView(parts);
 }
 
 // ---------- shell, sign in, routing ----------
@@ -628,7 +942,8 @@ function signOut() { token = ''; me = null; localStorage.removeItem(TOKEN_KEY); 
 
 function renderShell() {
   const items = [['#/', 'Home', true], ['#/accounts', 'Accounts', can('account', 'read')], ['#/contacts', 'Contacts', can('contact', 'read')],
-    ['#/deals', 'Deals', can('opportunity', 'read')], ['#/cases', 'Cases', can('case', 'read')]];
+    ['#/deals', 'Deals', can('opportunity', 'read')], ['#/cases', 'Cases', can('case', 'read')],
+    ['#/reports', 'Reports', can('case', 'read') || can('opportunity', 'read') || can('account', 'read')], ['#/settings', 'Settings', true]];
   $('#app').replaceChildren(h('div', { class: 'shell' },
     h('nav', { class: 'side' }, h('div', { class: 'brand' }, h('i'), 'CRM'),
       items.filter((i) => i[2]).map(([href, label]) => h('a', { class: 'item', href, 'data-nav': href }, label)),
@@ -638,12 +953,15 @@ function renderShell() {
 
 async function route() {
   if (!me) return;
+  routeSeq++;
   const [, a, id] = (location.hash || '#/').split('/');
   const section = a || '';
   document.querySelectorAll('[data-nav]').forEach((n) => n.classList.toggle('on', n.dataset.nav === '#/' + section || (section === '' && n.dataset.nav === '#/')));
   try {
     setView(h('div', { class: 'muted' }, 'Loading…'));
     if (section === '') await viewHome();
+    else if (section === 'reports') await viewReports(id);
+    else if (section === 'settings') await viewSettings();
     else if (section === 'deals' && !id) await viewDeals();
     else if (ENT[section] && !id) await viewList(section);
     else if (ENT[section]) await viewDetail(section, id);

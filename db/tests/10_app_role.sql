@@ -415,3 +415,30 @@ DO $t$ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS: 20 app role cannot provision tenants';
   END;
 END $t$;
+
+-- 21. email_message: tenant isolated, can be updated while sending, never deleted
+SELECT pg_temp.use_tenant('a_tenant'), pg_temp.use_user('a_admin');
+DO $t$
+DECLARE v_id uuid; v_n int;
+BEGIN
+  INSERT INTO email_message (tenant_id, to_email, from_email, subject, body)
+  VALUES (pg_temp.ctx('a_tenant'), 'smith@acme.com', 'support@example.com', 'Re: hello', 'Hi there') RETURNING id INTO v_id;
+  UPDATE email_message SET status = 'sent', sent_at = now(), provider_message_id = 'abc' WHERE id = v_id;
+  IF (SELECT status FROM email_message WHERE id = v_id) = 'sent' AND (SELECT version FROM email_message WHERE id = v_id) = 2 THEN
+    RAISE NOTICE 'PASS: 21a email message insert and status update';
+  ELSE RAISE EXCEPTION 'FAIL: 21a email message update'; END IF;
+  BEGIN
+    INSERT INTO email_message (tenant_id, to_email, from_email, subject, body)
+    VALUES (pg_temp.ctx('a_tenant'), 'not an address', 'support@example.com', 'x', 'y');
+    RAISE EXCEPTION 'FAIL: 21b bad address accepted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS: 21b bad recipient address rejected'; END;
+  BEGIN
+    DELETE FROM email_message WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: 21c app role deleted an email record';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS: 21c app role cannot delete email records'; END;
+  PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'b_tenant'), false);
+  SELECT count(*) INTO v_n FROM email_message;
+  IF v_n = 0 THEN RAISE NOTICE 'PASS: 21d other tenant cannot see the email record';
+  ELSE RAISE EXCEPTION 'FAIL: 21d email leaked across tenants'; END IF;
+  PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'a_tenant'), false);
+END $t$;

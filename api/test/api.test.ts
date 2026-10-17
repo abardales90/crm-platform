@@ -30,6 +30,13 @@ describe('authentication', () => {
     expect(r.body.permissions.account).toEqual(['read', 'create', 'edit']);
     expect(r.body.permissions.case).toEqual(['read']);
   });
+  it('also reports who can manage people and roles, so the Settings screen can show the right controls', async () => {
+    const admin = await w.call('GET', '/v1/me', A());
+    expect(admin.body.permissions.app_user).toEqual(['read', 'create', 'edit', 'delete']);
+    expect(admin.body.permissions.role).toEqual(['read', 'create', 'edit', 'delete']);
+    const sales = await w.call('GET', '/v1/me', A('sales'));
+    expect(sales.body.permissions.app_user).toEqual([]);
+  });
 });
 
 describe('sandbox login', () => {

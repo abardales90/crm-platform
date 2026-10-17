@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { initPool, closePool } from '../src/db.js';
 import { buildApp } from '../src/app.js';
 import { signToken } from '../src/auth.js';
+import { EmailError, type OutgoingEmail } from '../src/email.js';
 
 export const LOGIN_KEY = 'login-key-login-key-login-key-login-key-1234';
 export const SECRET = 'test-secret-test-secret-test-secret-123456';
@@ -49,8 +50,17 @@ export async function setup() {
     [tenants.a.id, tenants.a.roles['Support Agent']]);
   await root.end();
 
+  // A pretend email provider: records what would be sent, or fails on demand.
+  const mail = { sent: [] as OutgoingEmail[], failWith: undefined as string | undefined };
+  const fakeSend = async (m: OutgoingEmail) => {
+    if (mail.failWith) throw new EmailError(mail.failWith);
+    mail.sent.push(m);
+    return { id: `fake-${mail.sent.length}` };
+  };
+
   initPool(dbUrl('api_test_login'));
-  const app = buildApp({ jwtSecret: SECRET, sandboxLogin: { key: LOGIN_KEY, tenantId: tenants.a.id } });
+  const app = buildApp({ jwtSecret: SECRET, sandboxLogin: { key: LOGIN_KEY, tenantId: tenants.a.id },
+    email: { send: fakeSend, from: 'Support <support@example.test>' } });
   await app.ready();
 
   const as = (t: 'a' | 'b', user: string) => ({ authorization: `Bearer ${signToken(SECRET, { tenantId: tenants[t].id, userId: tenants[t].users[user] })}` });
@@ -58,12 +68,19 @@ export async function setup() {
     const r = await app.inject({ method: method as any, url, headers, payload: payload as any });
     return { status: r.statusCode, body: r.body ? JSON.parse(r.body) : null };
   };
+  // Superuser SQL for setting up situations the API cannot (it bypasses row level security, so always name the tenant).
+  let su: pg.Client | undefined;
+  const sql = async (text: string, params?: unknown[]) => {
+    if (!su) { su = new pg.Client({ connectionString: dbUrl('postgres') }); await su.connect(); }
+    return su.query(text, params);
+  };
   const teardown = async () => {
+    await su?.end();
     await app.close();
     await closePool();
     await admin.query(`DROP DATABASE IF EXISTS ${DBNAME} WITH (FORCE)`);
     await admin.query(`DROP ROLE IF EXISTS api_test_login`);
     await admin.end();
   };
-  return { tenants, as, call, teardown, app };
+  return { tenants, as, call, teardown, app, mail, sql };
 }

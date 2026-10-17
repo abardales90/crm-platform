@@ -27,7 +27,7 @@ DO $t$ DECLARE n int; bad text;
 BEGIN
   SELECT count(*) INTO n FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'
     AND table_name NOT IN ('schema_migrations','test_ctx');
-  IF n = 22 THEN RAISE NOTICE 'PASS: 40a exactly 22 tables'; ELSE RAISE EXCEPTION 'FAIL: 40a table count %', n; END IF;
+  IF n = 23 THEN RAISE NOTICE 'PASS: 40a exactly 23 tables'; ELSE RAISE EXCEPTION 'FAIL: 40a table count %', n; END IF;
 
   SELECT string_agg(c.relname, ', ') INTO bad
   FROM pg_class c JOIN pg_namespace ns ON ns.oid=c.relnamespace

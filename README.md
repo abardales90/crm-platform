@@ -1,6 +1,6 @@
 # CRM Platform: Postgres schema v0
 
-22 tables, 8 migrations, 80 isolation and behavior tests.
+23 tables, 9 migrations, 84 isolation and behavior tests.
 
 ## Run it
 
@@ -46,3 +46,15 @@ Seed/demo data, API layer, connectors, read replica setup, backup policy, and mi
 `DATABASE_URL` (a Neon login that is a member of `crm_app`, not the Neon owner, so row level security applies)
 and `SANDBOX_TENANT_ID` (the id printed by `provision_tenant`). Render generates `JWT_SECRET` and `SANDBOX_LOGIN_KEY` itself;
 read the login key on the service's Environment tab. Sign in with your tenant admin email and that key.
+
+
+## Version 0.3: email, reports, settings
+
+- Reports screen: Support, Sales pipeline, Accounts and renewals. Each has a CSV download.
+- Settings screen: theme (match device, light, dark), workspace name, people and roles, email status and test.
+- Email replies on cases. Turn it on in Render, Environment tab, by adding:
+  - RESEND_API_KEY: the key from resend.com
+  - EMAIL_FROM: for example Support <support@yourdomain.com> (must be on a domain verified in Resend)
+  - EMAIL_REPLY_TO: optional
+- Without those two, everything else works and the reply box explains how to turn email on.
+- Existing database: run db/update_0009_email.sql once in the Neon SQL Editor.

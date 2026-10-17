@@ -5,6 +5,10 @@ import { verifyToken, signToken } from './auth.js';
 import { withTenant, type Db } from './db.js';
 import { ApiError, fromPg } from './errors.js';
 import { resources, columnsOf, isSystemCol, alwaysVisible, type Resource } from './resources.js';
+import type { EmailConfig } from './email.js';
+import { reportRoutes } from './reports.js';
+import { settingsRoutes } from './settings.js';
+import { caseMailRoutes } from './mail.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const q = (c: string) => `"${c}"`; // column names only ever come from the schema whitelist
@@ -14,6 +18,7 @@ type Access = Record<string, 'none' | 'read' | 'edit'>;
 export function buildApp(opts: {
   jwtSecret: string; logger?: boolean; uiDir?: string; trustProxy?: boolean;
   sandboxLogin?: { key: string; tenantId: string };
+  email?: EmailConfig;
 }) {
   const app = Fastify({ logger: opts.logger ?? false, genReqId: () => randomUUID(), trustProxy: opts.trustProxy ?? false });
 
@@ -114,13 +119,19 @@ export function buildApp(opts: {
     authed(req, async (db, userId) => {
       const u = await db.query(`SELECT id, email, display_name, status FROM app_user WHERE id = $1`, [userId]);
       const permissions: Record<string, string[]> = {};
-      for (const r of resources) {
+      // Records the screens show, plus the access settings that the Settings screen needs.
+      for (const perm of new Set([...resources.map((r) => r.perm), 'app_user', 'role'])) {
         const p = await db.query(
-          `SELECT a FROM unnest(ARRAY['read','create','edit','delete']) a WHERE can_do($1::uuid, $2, a)`, [userId, r.perm]);
-        permissions[r.perm] = p.rows.map((x) => x.a);
+          `SELECT a FROM unnest(ARRAY['read','create','edit','delete']) a WHERE can_do($1::uuid, $2, a)`, [userId, perm]);
+        permissions[perm] = p.rows.map((x) => x.a);
       }
       return { user: u.rows[0], permissions };
     }));
+
+  const kit = { authed, can };
+  reportRoutes(app, kit);
+  settingsRoutes(app, kit, opts.email);
+  caseMailRoutes(app, kit, opts.email);
 
   for (const res of resources) {
     const base = `/v1/${res.path}`;
