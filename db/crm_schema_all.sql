@@ -1,4 +1,4 @@
--- CRM schema v0: all 9 migrations in order. Paste into the Neon SQL Editor and run once.
+-- CRM schema v0: all 10 migrations in order. Paste into the Neon SQL Editor and run once.
 BEGIN;
 CREATE TABLE IF NOT EXISTS schema_migrations (filename text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
 
@@ -1067,6 +1067,7 @@ REVOKE ALL ON FUNCTION provision_tenant(text, text, text, text, text) FROM PUBLI
 GRANT EXECUTE ON FUNCTION provision_tenant(text, text, text, text, text) TO crm_provisioner;
 
 INSERT INTO schema_migrations (filename) VALUES ('0008_access_and_provisioning.sql');
+
 -- ===== migrations/0009_email.sql =====
 -- 0009 email: a record of every email the CRM sends
 
@@ -1110,4 +1111,41 @@ CREATE TRIGGER email_message_tenant_immutable BEFORE UPDATE ON email_message
   FOR EACH ROW EXECUTE FUNCTION trg_prevent_tenant_change();
 
 INSERT INTO schema_migrations (filename) VALUES ('0009_email.sql');
+
+-- ===== migrations/0010_user_preference.sql =====
+-- 0010 user preferences: each person's accent color, whether they finished the welcome tour,
+-- and the last update note they saw. One row per person.
+
+CREATE TABLE user_preference (
+  id                 uuid PRIMARY KEY DEFAULT uuid_v7(),
+  tenant_id          uuid NOT NULL REFERENCES tenant (id),
+  user_id            uuid NOT NULL,
+  accent             text CHECK (accent IN ('green', 'blue', 'purple', 'orange', 'rose', 'slate')),
+  tour_done_at       timestamptz,
+  last_seen_release  text CHECK (length(last_seen_release) <= 40),
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  updated_at         timestamptz NOT NULL DEFAULT now(),
+  created_by         uuid,
+  updated_by         uuid,
+  deleted_at         timestamptz,
+  version            integer NOT NULL DEFAULT 1,
+  UNIQUE (tenant_id, id),
+  UNIQUE (tenant_id, user_id),
+  FOREIGN KEY (tenant_id, user_id) REFERENCES app_user (tenant_id, id)
+);
+
+ALTER TABLE user_preference ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_preference FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON user_preference
+  USING (tenant_id = current_tenant_id()) WITH CHECK (tenant_id = current_tenant_id());
+
+GRANT SELECT, INSERT, UPDATE ON user_preference TO crm_app;
+GRANT SELECT ON user_preference TO crm_readonly;
+
+CREATE TRIGGER user_preference_std BEFORE INSERT OR UPDATE ON user_preference
+  FOR EACH ROW EXECUTE FUNCTION trg_set_standard_columns();
+CREATE TRIGGER user_preference_tenant_immutable BEFORE UPDATE ON user_preference
+  FOR EACH ROW EXECUTE FUNCTION trg_prevent_tenant_change();
+
+INSERT INTO schema_migrations (filename) VALUES ('0010_user_preference.sql');
 COMMIT;

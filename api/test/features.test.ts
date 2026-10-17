@@ -355,3 +355,36 @@ describe('reports', () => {
     expect((await w.call('GET', '/v1/reports/accounts', A())).body.totals.total).not.toBe(5);       // tenant A has its own accounts
   });
 });
+
+// ---------------------------------------------------------------- preferences
+
+describe('my preferences', () => {
+  it('start empty, then remember a color, the tour and the last update seen', async () => {
+    const first = await w.call('GET', '/v1/me/preferences', A('sales'));
+    expect(first.body).toEqual({ accent: null, tour_done_at: null, last_seen_release: null });
+    expect((await w.call('PUT', '/v1/me/preferences', A('sales'), { accent: 'purple' })).body.accent).toBe('purple');
+    const done = await w.call('PUT', '/v1/me/preferences', A('sales'), { tour_done: true, last_seen_release: '0.4' });
+    expect(done.status).toBe(200);
+    expect(done.body).toMatchObject({ accent: 'purple', last_seen_release: '0.4' });
+    expect(done.body.tour_done_at).toBeTruthy();
+    const stamp = done.body.tour_done_at;
+    const again = await w.call('PUT', '/v1/me/preferences', A('sales'), { tour_done: true });
+    expect(again.body.tour_done_at).toBe(stamp);         // finishing twice keeps the first time
+  });
+  it('are private to each person and each workspace', async () => {
+    expect((await w.call('GET', '/v1/me/preferences', A('agent'))).body.accent).toBeNull();
+    expect((await w.call('GET', '/v1/me/preferences', B('sales'))).body.accent).toBeNull();
+  });
+  it('a person with the lowest access can still set their own look', async () => {
+    expect((await w.call('PUT', '/v1/me/preferences', A('finance'), { accent: 'rose' })).status).toBe(200);
+  });
+  it('reject unknown colors and empty or odd requests', async () => {
+    expect((await w.call('PUT', '/v1/me/preferences', A(), { accent: 'hotpink' })).status).toBe(400);
+    expect((await w.call('PUT', '/v1/me/preferences', A(), {})).status).toBe(400);
+    expect((await w.call('PUT', '/v1/me/preferences', A(), { tour_done: false })).status).toBe(400);
+    expect((await w.call('PUT', '/v1/me/preferences', A(), { last_seen_release: '' })).status).toBe(400);
+  });
+  it('need a sign in', async () => {
+    expect((await w.call('GET', '/v1/me/preferences', undefined as any)).status).toBe(401);
+  });
+});

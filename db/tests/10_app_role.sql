@@ -442,3 +442,31 @@ BEGIN
   ELSE RAISE EXCEPTION 'FAIL: 21d email leaked across tenants'; END IF;
   PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'a_tenant'), false);
 END $t$;
+
+-- 22. user_preference: one row per person, tenant isolated, never deleted
+SELECT pg_temp.use_tenant('a_tenant'), pg_temp.use_user('a_admin');
+DO $t$
+DECLARE v_id uuid; v_n int;
+BEGIN
+  INSERT INTO user_preference (tenant_id, user_id, accent) VALUES (pg_temp.ctx('a_tenant'), pg_temp.ctx('a_admin')::uuid, 'blue') RETURNING id INTO v_id;
+  UPDATE user_preference SET tour_done_at = now(), last_seen_release = '0.4' WHERE id = v_id;
+  IF (SELECT version FROM user_preference WHERE id = v_id) = 2 THEN RAISE NOTICE 'PASS: 22a preference insert and update';
+  ELSE RAISE EXCEPTION 'FAIL: 22a preference update'; END IF;
+  BEGIN
+    INSERT INTO user_preference (tenant_id, user_id) VALUES (pg_temp.ctx('a_tenant'), pg_temp.ctx('a_admin')::uuid);
+    RAISE EXCEPTION 'FAIL: 22b second row for the same person accepted';
+  EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'PASS: 22b one row per person'; END;
+  BEGIN
+    UPDATE user_preference SET accent = 'hotpink' WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: 22c unknown color accepted';
+  EXCEPTION WHEN check_violation THEN RAISE NOTICE 'PASS: 22c unknown color rejected'; END;
+  BEGIN
+    DELETE FROM user_preference WHERE id = v_id;
+    RAISE EXCEPTION 'FAIL: 22d app role deleted a preference row';
+  EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'PASS: 22d app role cannot delete preference rows'; END;
+  PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'b_tenant'), false);
+  SELECT count(*) INTO v_n FROM user_preference;
+  IF v_n = 0 THEN RAISE NOTICE 'PASS: 22e other tenant cannot see the preference row';
+  ELSE RAISE EXCEPTION 'FAIL: 22e preference leaked across tenants'; END IF;
+  PERFORM set_config('app.tenant_id', (SELECT v FROM test_ctx WHERE k = 'a_tenant'), false);
+END $t$;

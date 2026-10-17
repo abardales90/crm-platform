@@ -1,4 +1,5 @@
 // CRM web app. No build step. All text from the server goes in with textContent, never as HTML.
+import { RELEASES } from './changelog.js';
 
 const TOKEN_KEY = 'crm_token';
 let token = localStorage.getItem(TOKEN_KEY) || '';
@@ -12,6 +13,16 @@ function getTheme() { try { return localStorage.getItem(THEME_KEY) || 'system'; 
 function applyTheme(t) { if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; }
 function setTheme(t) { try { localStorage.setItem(THEME_KEY, t); } catch { /* private window: the choice lasts until reload */ } applyTheme(t); }
 applyTheme(getTheme());
+
+// ---------- accent color: one per person, saved on the server and remembered in this browser to avoid a flash ----------
+const ACCENT_KEY = 'crm_accent';
+const ACCENTS = [['green', 'Green'], ['blue', 'Blue'], ['purple', 'Purple'], ['orange', 'Orange'], ['rose', 'Rose'], ['slate', 'Slate']];
+function applyAccent(a) {
+  if (a && a !== 'green' && ACCENTS.some((x) => x[0] === a)) document.documentElement.dataset.accent = a; else delete document.documentElement.dataset.accent;
+  try { localStorage.setItem(ACCENT_KEY, a || 'green'); } catch { /* private window */ }
+}
+let prefs = { accent: null, tour_done_at: null, last_seen_release: null };
+async function savePrefs(change) { prefs = await api('PUT', '/me/preferences', change); return prefs; }
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...kids) {
@@ -825,15 +836,39 @@ async function viewReports(tabKey) {
 const THEMES = [['system', 'Match my device'], ['light', 'Light'], ['dark', 'Dark']];
 const STATUS_LABEL = { active: 'Active', invited: 'Invited', disabled: 'Turned off' };
 
-async function viewSettings() {
+const SETTINGS_TABS = [['general', 'General', () => true], ['people', 'People', () => can('app_user', 'read')], ['changelog', 'Change log', () => true]];
+
+function releaseList(list) {
+  return h('div', {}, list.map((r, i) => h('div', { class: 'release' },
+    h('h3', {}, r.title, i === 0 && r.id === RELEASES[0].id ? h('span', { class: 'tag' }, 'Newest') : null),
+    h('div', { class: 'when' }, 'Version ' + r.id + ' · ' + fmtDate(r.date)),
+    h('ul', {}, r.items.map((t) => h('li', {}, t))))));
+}
+
+async function viewSettings(tabKey) {
   const ws = cache.workspace || { name: '', email: { configured: false } };
   const canEditUsers = can('app_user', 'edit');
-  const parts = [h('div', { class: 'head' }, h('h1', {}, 'Settings'))];
+  const tabs = SETTINGS_TABS.filter((t) => t[2]());
+  const tab = (tabs.find((t) => t[0] === tabKey) || tabs[0])[0];
+  const parts = [h('div', { class: 'head' }, h('h1', {}, 'Settings')),
+    h('div', { class: 'tabs' }, tabs.map((t) => h('a', { class: 'tab' + (t[0] === tab ? ' on' : ''), href: '#/settings/' + t[0] }, t[1])))];
 
+  if (tab === 'general') {
   // appearance
   const cur = getTheme();
-  parts.push(card('Appearance', h('div', { class: 'radios' }, THEMES.map(([v, l]) =>
-    h('label', { class: 'radio' }, h('input', { type: 'radio', name: 'theme', value: v, checked: v === cur, onchange: () => setTheme(v) }), l)))));
+  parts.push(card('Appearance', h('div', {},
+    h('div', { class: 'radios' }, THEMES.map(([v, l]) =>
+      h('label', { class: 'radio' }, h('input', { type: 'radio', name: 'theme', value: v, checked: v === cur, onchange: () => setTheme(v) }), l))),
+    h('h2', { style: 'margin:16px 0 8px' }, 'Color'),
+    h('div', { class: 'swatches' }, ACCENTS.map(([v, l]) =>
+      h('label', { class: 'swatch' }, h('input', { type: 'radio', name: 'accent', value: v, checked: v === (prefs.accent || 'green'),
+        onchange: async () => { applyAccent(v); try { await savePrefs({ accent: v }); } catch (e) { toast(errText(e), true); } } }),
+        h('i', { class: 'sw-' + v }), l))))));
+
+  // welcome tour
+  parts.push(card('Welcome tour', h('div', { class: 'inline' },
+    h('p', { style: 'margin:0;flex:1;min-width:220px' }, 'A one minute walk through the main parts of the CRM. Play it again any time.'),
+    h('button', { onclick: () => runTour({ required: false }) }, 'Take the tour'))));
 
   // workspace
   const nameInput = h('input', { type: 'text', value: ws.name, disabled: !canEditUsers });
@@ -857,9 +892,10 @@ async function viewSettings() {
     : h('div', {}, h('p', { style: 'margin-top:0' }, 'Email is not set up yet, so replies cannot be sent from a case.'),
         h('p', { class: 'muted', style: 'margin-bottom:0' }, 'To turn it on, add two settings in Render under Environment: RESEND_API_KEY and EMAIL_FROM. Then come back here and send yourself a test.'));
   parts.push(card('Email', emailBody));
+  }
 
   // users
-  if (can('app_user', 'read')) {
+  if (tab === 'people' && can('app_user', 'read')) {
     const wrap = h('div', {}, h('div', { class: 'muted' }, 'Loading…'));
     parts.push(card('People', wrap, canEditUsers ? h('button', { class: 'small primary', onclick: () => invite() }, 'Invite someone') : null));
     parts.push(h('p', { class: 'muted', style: 'margin-top:-6px' }, 'Everyone signs in with the shared access key for now, so only add people you trust with it. Google sign in is the next step.'));
@@ -899,7 +935,78 @@ async function viewSettings() {
     }
     draw().catch((e) => wrap.replaceChildren(h('div', { class: 'banner' }, errText(e))));
   }
+
+  if (tab === 'changelog') parts.push(h('div', { class: 'card' }, releaseList(RELEASES)));
   setView(parts);
+}
+
+// ---------- welcome tour and what's new ----------
+const TOUR = [
+  { title: 'Welcome to your CRM', text: ['This is one place for your customers, your deals, and your support cases.', 'The tour takes about a minute.'] },
+  { title: 'Accounts and contacts', target: '#/accounts', text: ['Accounts are the companies you work with. Contacts are the people at those companies.', 'Open any record to see everything about it in one place.'] },
+  { title: 'Deals', target: '#/deals', text: ['Deals are the sales you are working on.', 'Drag a deal from one stage to the next as it moves along.'] },
+  { title: 'Cases', target: '#/cases', text: ['Cases are customer questions and problems. Each one has a clock for the first reply and for solving it.', 'You can reply to the customer by email from inside the case once email is turned on.'] },
+  { title: 'Reports', target: '#/reports', text: ['Reports show how support and sales are doing.', 'Every report has a Download CSV button if you want the numbers in a spreadsheet.'] },
+  { title: 'Settings', target: '#/settings', text: ['The gear at the bottom left opens Settings.', 'Pick your color, switch between light and dark, add people, replay this tour, and read the Change log.'] },
+  { title: 'You are all set', text: ['That is everything. Click around, nothing here can break.', 'When something new is added, you will see a short note about it the next time you sign in.'] },
+];
+
+// Walks through the tour in a pop up. When required, there is no way out until the last step.
+function runTour({ required }) {
+  const steps = TOUR.filter((t) => !t.target || document.querySelector(`[data-nav="${t.target}"]`));
+  let i = 0;
+  return new Promise((resolve) => {
+    const body = h('div', { class: 'tourstep' });
+    const dots = h('div', { class: 'tourdots' });
+    const back = h('button', { type: 'button', onclick: () => { i--; draw(); } }, 'Back');
+    const next = h('button', { type: 'button', class: 'primary', onclick: () => { if (i === steps.length - 1) return finish(true); i++; draw(); } }, 'Next');
+    const close = required ? null : h('button', { type: 'button', onclick: () => finish(false) }, 'Close');
+    const dlg = h('dialog', { class: 'tour', 'aria-label': 'Welcome tour' }, h('div', { class: 'db' }, body), h('div', { class: 'df' }, dots, close, back, next));
+    const clearHl = () => document.querySelectorAll('.tourhl').forEach((n) => n.classList.remove('tourhl'));
+    function draw() {
+      const st = steps[i];
+      body.replaceChildren(h('h3', {}, st.title), ...st.text.map((t) => h('p', {}, t)));
+      dots.replaceChildren(...steps.map((_, k) => h('i', { class: k === i ? 'on' : '' })));
+      back.hidden = i === 0;
+      next.textContent = i === steps.length - 1 ? 'Finish' : 'Next';
+      clearHl();
+      if (st.target) document.querySelector(`[data-nav="${st.target}"]`)?.classList.add('tourhl');
+    }
+    let done = false;
+    function finish(ok) { if (done) return; done = true; clearHl(); dlg.close(); dlg.remove(); resolve(ok); }
+    if (required) dlg.addEventListener('cancel', (e) => e.preventDefault()); // Esc does nothing on the first tour
+    else dlg.addEventListener('cancel', () => finish(false));
+    document.body.append(dlg);
+    draw();
+    dlg.showModal();
+  });
+}
+
+const unseenReleases = () => {
+  const i = RELEASES.findIndex((r) => r.id === prefs.last_seen_release);
+  return i === -1 ? RELEASES : RELEASES.slice(0, i);
+};
+
+// Shows the notes for anything shipped since the last time this person looked. Closing it in any way counts as seen.
+function showWhatsNew(list) {
+  let saved = false;
+  const markSeen = async () => { if (saved) return; saved = true; try { await savePrefs({ last_seen_release: RELEASES[0].id }); } catch { /* shown again next time */ } };
+  const dlg = modal("What's new", releaseList(list), [
+    { label: 'Take the tour', run: async (d) => { d.close(); await runTour({ required: false }); } },
+    { label: 'Got it', primary: true },
+  ]);
+  dlg.addEventListener('close', markSeen);
+}
+
+// Runs once after sign in. The first tour cannot be skipped. After that, new updates show once.
+async function welcome() {
+  if (!prefs.tour_done_at) {
+    await runTour({ required: true });
+    try { await savePrefs({ tour_done: true, last_seen_release: RELEASES[0].id }); } catch (e) { toast(errText(e), true); }
+    return;
+  }
+  const list = unseenReleases();
+  if (list.length) showWhatsNew(list);
 }
 
 // ---------- shell, sign in, routing ----------
@@ -938,16 +1045,24 @@ function renderLogin(msg) {
         try { await enter(t); } catch (x) { fail(x.status === 401 ? 'That token was not accepted. It may have expired.' : errText(x)); }
       } }, 'Use token'))))));
 }
-function signOut() { token = ''; me = null; localStorage.removeItem(TOKEN_KEY); renderLogin(); }
+function signOut() { token = ''; me = null; prefs = { accent: null, tour_done_at: null, last_seen_release: null }; localStorage.removeItem(TOKEN_KEY); renderLogin(); }
+
+function gearIcon() {
+  return svg('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' },
+    svg('circle', { cx: 12, cy: 12, r: 3 }),
+    svg('path', { d: 'M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z' }));
+}
 
 function renderShell() {
   const items = [['#/', 'Home', true], ['#/accounts', 'Accounts', can('account', 'read')], ['#/contacts', 'Contacts', can('contact', 'read')],
     ['#/deals', 'Deals', can('opportunity', 'read')], ['#/cases', 'Cases', can('case', 'read')],
-    ['#/reports', 'Reports', can('case', 'read') || can('opportunity', 'read') || can('account', 'read')], ['#/settings', 'Settings', true]];
+    ['#/reports', 'Reports', can('case', 'read') || can('opportunity', 'read') || can('account', 'read')]];
   $('#app').replaceChildren(h('div', { class: 'shell' },
     h('nav', { class: 'side' }, h('div', { class: 'brand' }, h('i'), 'CRM'),
       items.filter((i) => i[2]).map(([href, label]) => h('a', { class: 'item', href, 'data-nav': href }, label)),
-      h('div', { class: 'who' }, h('b', {}, me.user.display_name), h('span', { class: 'muted' }, me.user.email), h('div', {}, h('a', { href: '#', onclick: (e) => { e.preventDefault(); signOut(); } }, 'Sign out')))),
+      h('div', { class: 'bottombar' },
+        h('div', { class: 'who' }, h('b', {}, me.user.display_name), h('span', { class: 'muted' }, me.user.email), h('div', {}, h('a', { href: '#', onclick: (e) => { e.preventDefault(); signOut(); } }, 'Sign out'))),
+        h('a', { class: 'gear', href: '#/settings', 'data-nav': '#/settings', title: 'Settings', 'aria-label': 'Settings' }, gearIcon()))),
     h('main', {}, h('div', { id: 'view' }))));
 }
 
@@ -961,7 +1076,7 @@ async function route() {
     setView(h('div', { class: 'muted' }, 'Loading…'));
     if (section === '') await viewHome();
     else if (section === 'reports') await viewReports(id);
-    else if (section === 'settings') await viewSettings();
+    else if (section === 'settings') await viewSettings(id);
     else if (section === 'deals' && !id) await viewDeals();
     else if (ENT[section] && !id) await viewList(section);
     else if (ENT[section]) await viewDetail(section, id);
@@ -974,9 +1089,13 @@ async function route() {
 
 async function boot() {
   me = await api('GET', '/me');
+  // A failure here must never block sign in: the CRM just shows the default look.
+  prefs = await api('GET', '/me/preferences').catch(() => ({ accent: null, tour_done_at: 'unknown', last_seen_release: RELEASES[0].id }));
+  applyAccent(prefs.accent);
   await loadRefs();
   renderShell();
   await route();
+  welcome();
 }
 window.addEventListener('hashchange', route);
 if (token) boot().catch(() => renderLogin()); else renderLogin();

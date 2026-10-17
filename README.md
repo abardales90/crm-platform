@@ -1,6 +1,6 @@
 # CRM Platform: Postgres schema v0
 
-23 tables, 9 migrations, 84 isolation and behavior tests.
+24 tables, 10 migrations, 89 isolation and behavior tests.
 
 ## Run it
 
@@ -57,7 +57,7 @@ read the login key on the service's Environment tab. Sign in with your tenant ad
   - EMAIL_FROM: for example Support <support@yourdomain.com> (must be on a domain verified in Resend)
   - EMAIL_REPLY_TO: optional
 - Without those two, everything else works and the reply box explains how to turn email on.
-- Existing database: run db/update_0009_email.sql once in the Neon SQL Editor.
+- Database changes now apply on their own when the app starts (see below).
 
 ## Automatic database updates
 
