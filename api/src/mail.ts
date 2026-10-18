@@ -17,7 +17,7 @@ export function caseMailRoutes(app: FastifyInstance, kit: Kit, email: EmailConfi
       if (!UUID.test(id)) throw new ApiError(404, 'not_found', 'Not found');
       await can(db, userId, 'case', 'read');
       const r = await db.query(
-        `SELECT id, to_email, subject, status, error, sent_at, created_at, created_by FROM email_message
+        `SELECT id, to_email, from_email, direction, subject, status, error, sent_at, created_at, created_by FROM email_message
           WHERE case_id = $1 AND deleted_at IS NULL ORDER BY created_at`, [id]);
       return { data: r.rows };
     }));
@@ -52,13 +52,13 @@ export function caseMailRoutes(app: FastifyInstance, kit: Kit, email: EmailConfi
         `INSERT INTO email_message (tenant_id, case_id, contact_id, to_email, from_email, subject, body)
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
         [tenantId, c.id, c.contact_id, ct.email, email.from, subject, full])).rows[0];
-      return { messageId: m.id as string, to: ct.email as string, subject, full, status: c.status as string };
+      return { caseNumber: c.case_number as number, messageId: m.id as string, to: ct.email as string, subject, full, status: c.status as string };
     });
 
     let provider: { id: string } | undefined;
     let failure: string | undefined;
     try {
-      provider = await email!.send({ from: email!.from, to: prep.to, subject: prep.subject, text: prep.full, replyTo: email!.replyTo });
+      provider = await email!.send({ from: email!.from, to: prep.to, subject: prep.subject, text: prep.full, replyTo: email!.caseReplyTo ? email!.caseReplyTo(prep.caseNumber) : email!.replyTo });
     } catch (e) {
       failure = e instanceof EmailError ? e.message : 'The email could not be sent.';
       if (!(e instanceof EmailError)) req.log.error(e);

@@ -4,7 +4,7 @@ export type OutgoingEmail = { from: string; to: string; subject: string; text: s
 export type SendResult = { id: string };
 export type EmailSender = (msg: OutgoingEmail) => Promise<SendResult>;
 
-export type EmailConfig = { send: EmailSender; from: string; replyTo?: string };
+export type EmailConfig = { send: EmailSender; from: string; replyTo?: string; caseReplyTo?: (caseNumber: number) => string };
 
 export class EmailError extends Error {}
 

@@ -104,6 +104,13 @@ Only people already listed under Settings, People can sign in. Google proves who
 
 - CSV import now covers deals (the `opportunities` resource) and cases. Accounts, contacts, stages and queues are matched by name in the browser, then sent to the same all or nothing `/import` route. Cases with no assignee go to the queue picked in the dialog. SFDC style status and priority words are translated.
 
+## Version 0.13
+
+- Email in. Resend sends a signed webhook (`POST /v1/webhooks/resend`) for every message that arrives at the receiving domain. Tally checks the signature (Svix style HMAC, 5 minute window), reads the full message with the Resend API, and either attaches it to a case or opens a new one.
+- A message belongs to a case when the subject has `[Case #123]` or the address it was sent to is `name+c123@domain`. Outgoing replies use that address as Reply-To automatically.
+- Settings in Render: `RESEND_WEBHOOK_SECRET` (the webhook signing secret, starts with `whsec_`). `RESEND_API_KEY` must be a Full access key so Tally can read received messages. `SANDBOX_TENANT_ID` says which workspace receives the mail.
+- Automatic replies, bounces, mailing lists, our own domain and DMARC failures are dropped. A repeated delivery is ignored (migration 0014 adds `direction` and a unique index on inbound message ids).
+
 ## Version 0.12
 
 - Backups. Settings, General, Backup downloads one JSON file (admins only, `GET /v1/settings/backup`) with every workspace table, deleted records included. Sign in details, audit history and AI logs are left out.

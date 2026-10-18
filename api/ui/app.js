@@ -845,9 +845,9 @@ async function commentsPanel(rec) {
     composer = h('div', { style: 'margin-top:12px' }, body, emailRow, h('div', { class: 'inline', style: 'margin-top:8px' }, mode, send),
       why ? h('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' }, why) : null);
   }
-  const emailLog = emails.length ? related('Emails sent', h('div', { class: 'tablewrap' }, h('table', {}, h('tbody', {}, emails.map((m) => h('tr', {},
-    h('td', { class: 'muted' }, fmtDateTime(m.sent_at || m.created_at)), h('td', {}, m.to_email), h('td', {}, m.subject),
-    h('td', {}, h('span', { class: 'pill ' + (m.status === 'sent' ? 'ok' : m.status === 'failed' ? 'bad' : ''), title: m.error || null }, cap(m.status)))))))))
+  const emailLog = emails.length ? related('Emails', h('div', { class: 'tablewrap' }, h('table', {}, h('tbody', {}, emails.map((m) => h('tr', {},
+    h('td', { class: 'muted' }, fmtDateTime(m.sent_at || m.created_at)), h('td', {}, m.direction === 'in' ? 'From ' + m.from_email : 'To ' + m.to_email), h('td', {}, m.subject),
+    h('td', {}, h('span', { class: 'pill ' + (m.status === 'sent' || m.status === 'received' ? 'ok' : m.status === 'failed' ? 'bad' : ''), title: m.error || null }, cap(m.status)))))))))
     : null;
   return h('div', {}, related('Conversation', h('div', {}, thread, composer)), emailLog);
 }

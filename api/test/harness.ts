@@ -5,6 +5,9 @@ import { initPool, closePool } from '../src/db.js';
 import { buildApp } from '../src/app.js';
 import { signToken } from '../src/auth.js';
 import { EmailError, type OutgoingEmail } from '../src/email.js';
+import type { ReceivedEmail } from '../src/inbound.js';
+
+export const WEBHOOK_SECRET = 'whsec_' + Buffer.from('webhook-secret-for-tests-1234567890').toString('base64');
 
 export const LOGIN_KEY = 'login-key-login-key-login-key-login-key-1234';
 export const SECRET = 'test-secret-test-secret-test-secret-123456';
@@ -59,9 +62,12 @@ export async function setup() {
     return { id: `fake-${mail.sent.length}` };
   };
 
+  // Pretend inbox: messages the email service would hand over when asked for them by id.
+  const inbox: Record<string, ReceivedEmail> = {};
   initPool(dbUrl('api_test_login'));
   const app = buildApp({ jwtSecret: SECRET, sandboxLogin: { key: LOGIN_KEY, tenantId: tenants.a.id },
-    email: { send: fakeSend, from: 'Support <support@example.test>' },
+    email: { send: fakeSend, from: 'Support <support@example.test>', caseReplyTo: (n) => `support+c${n}@example.test` },
+    inbound: { secret: WEBHOOK_SECRET, apiKey: 'unused', tenantId: tenants.a.id, fetchEmail: async (id) => { if (!inbox[id]) throw new Error('no such message'); return inbox[id]; } },
     google: { clientId: 'test-client', clientSecret: 'test-secret', tenantId: tenants.a.id, publicUrl: 'https://crm.example.test',
       // The test "code" is a JSON note of what Google would say about the person. Everything else is checked by the real code.
       exchange: async (code) => { const c = JSON.parse(code); if (c.reject) throw new Error('rejected'); return { iss: 'https://accounts.google.com', aud: 'test-client', exp: Math.floor(Date.now() / 1000) + 600, email_verified: true, ...c }; } } });
@@ -86,5 +92,5 @@ export async function setup() {
     await admin.query(`DROP ROLE IF EXISTS api_test_login`);
     await admin.end();
   };
-  return { tenants, as, call, teardown, app, mail, sql };
+  return { tenants, as, call, teardown, app, mail, sql, inbox };
 }

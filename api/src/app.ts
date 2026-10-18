@@ -9,6 +9,7 @@ import type { EmailConfig } from './email.js';
 import { reportRoutes } from './reports.js';
 import { settingsRoutes } from './settings.js';
 import { caseMailRoutes } from './mail.js';
+import { inboundRoutes, type InboundConfig } from './inbound.js';
 import { prefRoutes } from './prefs.js';
 import { googleRoutes, type GoogleConfig } from './google.js';
 import { searchRoutes } from './search.js';
@@ -25,6 +26,7 @@ export function buildApp(opts: {
   jwtSecret: string; logger?: boolean; uiDir?: string; trustProxy?: boolean;
   sandboxLogin?: { key: string; tenantId: string };
   email?: EmailConfig;
+  inbound?: InboundConfig;
   google?: GoogleConfig;
 }) {
   const app = Fastify({ logger: opts.logger ?? false, genReqId: () => randomUUID(), trustProxy: opts.trustProxy ?? false });
@@ -156,6 +158,7 @@ export function buildApp(opts: {
   reportRoutes(app, kit);
   settingsRoutes(app, kit, opts.email, { google: !!opts.google, key: !!opts.sandboxLogin });
   caseMailRoutes(app, kit, opts.email);
+  inboundRoutes(app, opts.inbound, (opts.email?.from ?? '').match(/@([^>\s]+)>?\s*$/)?.[1]?.toLowerCase() ?? '');
   prefRoutes(app, kit);
   searchRoutes(app, kit);
   customFieldRoutes(app, kit);

@@ -2,6 +2,15 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.13', date: '2026-10-17', title: 'Email comes into Tally',
+    items: [
+      'When a customer replies to an email you sent from a case, the reply now shows up in that case, in the conversation and in the Emails list. A solved, closed or waiting case is set back to Open.',
+      'A brand new email to your support address opens a new case. The sender becomes a contact if they are not one already, and the case goes into your Support queue (or your first queue).',
+      'Only the new part of a reply is kept, not the long quoted history under it.',
+      'Out of office replies, bounces, mailing lists and messages that fail the sender check are ignored, so they never become cases.',
+    ],
+  },
+  {
     id: '0.12', date: '2026-10-17', title: 'Backups',
     items: [
       'Settings, General now has a Backup card. Admins can download one file with every company, contact, deal, case, note, task, person, role, custom field and saved list. Deleted records are included.',

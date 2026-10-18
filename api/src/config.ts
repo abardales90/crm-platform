@@ -15,6 +15,8 @@ export const config = {
   resendApiKey: process.env.RESEND_API_KEY ?? '',
   emailFrom: process.env.EMAIL_FROM ?? '',        // for example: Support <support@yourdomain.com>
   emailReplyTo: process.env.EMAIL_REPLY_TO ?? '', // optional
+  // Optional. Turns on email coming IN: the signing secret of a Resend webhook (starts with whsec_). Needs a Full access API key.
+  resendWebhookSecret: process.env.RESEND_WEBHOOK_SECRET ?? '',
 };
 
 export function requireConfig() {
@@ -25,5 +27,6 @@ export function requireConfig() {
   if (config.googleClientId && (!config.googleClientSecret || !config.sandboxTenantId)) missing.push('GOOGLE_CLIENT_SECRET and SANDBOX_TENANT_ID (needed when GOOGLE_CLIENT_ID is set)');
   if (config.publicUrl && !/^https?:\/\/[^/\s]+$/.test(config.publicUrl)) missing.push('PUBLIC_URL (like https://your-site.onrender.com, with nothing after the name)');
   if (config.resendApiKey && !config.emailFrom) missing.push('EMAIL_FROM (needed when RESEND_API_KEY is set)');
+  if (config.resendWebhookSecret && (!config.resendApiKey || !config.sandboxTenantId)) missing.push('RESEND_API_KEY and SANDBOX_TENANT_ID (needed when RESEND_WEBHOOK_SECRET is set)');
   if (missing.length) throw new Error(`Missing config: ${missing.join(', ')}`);
 }
