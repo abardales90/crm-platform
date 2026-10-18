@@ -6,6 +6,7 @@ export const RELEASES = [
     items: [
       'Settings, General now has a Backup card. Admins can download one file with every company, contact, deal, case, note, task, person, role, custom field and saved list. Deleted records are included.',
       'Tally remembers when you last downloaded a copy on this computer.',
+      'The import window now reminds you to download a backup first. It is only a reminder, so it never blocks the import.',
       'A step by step guide for a full database copy, and for getting it back, is in the project under docs, BACKUPS.',
     ],
   },

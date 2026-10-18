@@ -869,6 +869,16 @@ function svg(tag, attrs, ...kids) {
 }
 
 // Saves a table as a CSV file. Text that starts with = + - @ gets a leading quote so a spreadsheet never runs it as a formula.
+async function downloadBackup() {
+  const data = await api('GET', '/settings/backup');
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
+  const a = h('a', { href: url, download: 'tally-backup-' + new Date().toISOString().slice(0, 10) + '.json' });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const now = new Date().toISOString();
+  try { localStorage.setItem('tally_last_backup', now); } catch {}
+  return now;
+}
 function downloadCsv(name, cols, rows) {
   const esc = (v) => {
     let s = v == null ? '' : String(v);
@@ -1106,13 +1116,7 @@ async function viewSettings(tabKey) {
       h('button', { class: 'primary', onclick: async (e) => {
         e.target.disabled = true;
         try {
-          const data = await api('GET', '/settings/backup');
-          const url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
-          const a = h('a', { href: url, download: 'tally-backup-' + new Date().toISOString().slice(0, 10) + '.json' });
-          document.body.append(a); a.click(); a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
-          const now = new Date().toISOString();
-          try { localStorage.setItem('tally_last_backup', now); } catch {}
+          const now = await downloadBackup();
           note.textContent = 'Last copy downloaded ' + new Date(now).toLocaleString() + '.';
           toast('Backup downloaded');
         } catch (err) { toast(errText(err), true); }
@@ -1662,7 +1666,14 @@ function openImport(key) {
     choices = matchColumns(key, table[0]);
     drawValues(); replan(); drawMap();
   });
-  modal(`Import ${ent.label.toLowerCase()} from CSV`, h('div', {}, file, h('div', { style: 'margin-top:6px' }, template),
+  const backupNote = h('div', { class: 'muted', style: 'margin-top:10px;padding:8px 10px;border:1px solid var(--line, #ccc);border-radius:8px' },
+    'Tip: download a backup before you import, so you can see exactly what you had. This is a reminder only. You can import without it. ',
+    can('app_user', 'edit') ? h('button', { class: 'small', onclick: async (e) => {
+      e.target.disabled = true;
+      try { await downloadBackup(); backupNote.replaceChildren('Backup downloaded. You are ready to import.'); }
+      catch (err) { toast(errText(err), true); e.target.disabled = false; }
+    } }, 'Download a backup') : 'Ask an admin to download one.');
+  modal(`Import ${ent.label.toLowerCase()} from CSV`, h('div', {}, backupNote, file, h('div', { style: 'margin-top:6px' }, template),
     info, mapBox, valueBox, result,
     queuePick ? h('label', { class: 'f', style: 'margin-top:12px' }, h('span', {}, 'Rows with no assignee go to this queue'), queuePick) : null,
     hasDupRule ? h('label', { class: 'inline', style: 'margin-top:12px;gap:8px' }, skip, 'Skip rows that already exist (same ' + (key === 'accounts' ? 'domain' : 'email') + ')') : null), [

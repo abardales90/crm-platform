@@ -108,6 +108,7 @@ Only people already listed under Settings, People can sign in. Google proves who
 ## Version 0.12
 
 - Backups. Settings, General, Backup downloads one JSON file (admins only, `GET /v1/settings/backup`) with every workspace table, deleted records included. Sign in details, audit history and AI logs are left out.
+- The import window reminds you to download a backup first (reminder only, never blocks).
 - `docs/BACKUPS.md` explains the full copy with `pg_dump` and getting it back with `pg_restore` (tested here: row counts match after a restore).
 
 ## Version 0.11
