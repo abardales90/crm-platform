@@ -14,6 +14,7 @@ import { googleRoutes, type GoogleConfig } from './google.js';
 import { searchRoutes } from './search.js';
 import { customFieldRoutes, cleanCustom } from './customfields.js';
 import { viewRoutes } from './views.js';
+import { backupRoutes } from './backup.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const q = (c: string) => `"${c}"`; // column names only ever come from the schema whitelist
@@ -159,6 +160,7 @@ export function buildApp(opts: {
   searchRoutes(app, kit);
   customFieldRoutes(app, kit);
   viewRoutes(app, kit);
+  backupRoutes(app, kit);
 
   for (const res of resources) {
     const base = `/v1/${res.path}`;

@@ -1097,6 +1097,30 @@ async function viewSettings(tabKey) {
   } }, 'Save');
   parts.push(card('Workspace', h('div', { class: 'inline' }, h('label', { class: 'f', style: 'flex:1;min-width:220px' }, h('span', {}, 'Workspace name'), nameInput), canEditUsers ? saveName : null)));
 
+  // backup (admins only)
+  if (canEditUsers) {
+    let last = null; try { last = localStorage.getItem('tally_last_backup'); } catch {}
+    const note = h('p', { class: 'muted', style: 'margin:8px 0 0' }, last ? 'Last copy downloaded ' + new Date(last).toLocaleString() + '.' : 'You have not downloaded a copy yet.');
+    parts.push(card('Backup', h('div', {},
+      h('p', { style: 'margin-top:0' }, 'Download one file with all your records: companies, contacts, deals, cases, notes, tasks, people, roles, custom fields and saved lists. Deleted records are included. Keep the file somewhere safe, like your Mac and a cloud drive. Treat it like a password, because anyone who has it can read your data.'),
+      h('button', { class: 'primary', onclick: async (e) => {
+        e.target.disabled = true;
+        try {
+          const data = await api('GET', '/settings/backup');
+          const url = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
+          const a = h('a', { href: url, download: 'tally-backup-' + new Date().toISOString().slice(0, 10) + '.json' });
+          document.body.append(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          const now = new Date().toISOString();
+          try { localStorage.setItem('tally_last_backup', now); } catch {}
+          note.textContent = 'Last copy downloaded ' + new Date(now).toLocaleString() + '.';
+          toast('Backup downloaded');
+        } catch (err) { toast(errText(err), true); }
+        e.target.disabled = false;
+      } }, 'Download a backup'),
+      note)));
+  }
+
   // email
   const emailBody = ws.email.configured
     ? h('div', {}, h('p', { style: 'margin-top:0' }, 'Email is on. Replies on a case go out from ', h('b', {}, ws.email.from), '.'),

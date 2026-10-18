@@ -462,3 +462,24 @@ describe('bulk import of deals and cases', () => {
     expect((await w.call('POST', '/v1/opportunities/import', {}, { rows: [] })).status).toBe(401);
   });
 });
+
+describe('backup download', () => {
+  it('gives an admin one file with every table, including deleted records and only their own company', async () => {
+    const acc = (await w.call('POST', '/v1/accounts', A(), { name: 'Backup Gone Co' })).body;
+    await w.call('DELETE', `/v1/accounts/${acc.id}`, A());
+    const r = await w.call('GET', '/v1/settings/backup', A());
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ format: 'tally-backup', version: 1 });
+    expect(Object.keys(r.body.tables)).toEqual(expect.arrayContaining(['account', 'contact', 'opportunity', 'support_case', 'activity', 'app_user', 'custom_field', 'saved_view']));
+    const mine = r.body.tables.account;
+    expect(mine.find((x: any) => x.id === acc.id)?.deleted_at).toBeTruthy();
+    expect(mine.every((x: any) => x.tenant_id === w.tenants.a.id)).toBe(true);
+    expect(r.body.counts.account).toBe(mine.length);
+    expect(JSON.stringify(r.body.tables.account)).not.toContain('Northstar Secret Co');
+  });
+
+  it('is for admins only and needs a signed in user', async () => {
+    for (const who of ['sales', 'agent', 'finance']) expect((await w.call('GET', '/v1/settings/backup', A(who))).status).toBe(403);
+    expect((await w.call('GET', '/v1/settings/backup', {})).status).toBe(401);
+  });
+});
