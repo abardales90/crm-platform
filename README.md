@@ -44,8 +44,7 @@ Seed/demo data, API layer, connectors, read replica setup, backup policy, and mi
 
 `render.yaml` describes the web service. On Render you set only two values by hand:
 `DATABASE_URL` (a Neon login that is a member of `crm_app`, not the Neon owner, so row level security applies)
-and `SANDBOX_TENANT_ID` (the id printed by `provision_tenant`). Render generates `JWT_SECRET` and `SANDBOX_LOGIN_KEY` itself;
-read the login key on the service's Environment tab. Sign in with your tenant admin email and that key.
+and `SANDBOX_TENANT_ID` (the id printed by `provision_tenant`). Render generates `JWT_SECRET` itself. People sign in with Google. (The old shared key, `SANDBOX_LOGIN_KEY`, is no longer created; if you ever add it back in Render, a key box appears on the sign in page.)
 
 
 ## Version 0.3: email, reports, settings
@@ -88,7 +87,7 @@ Optional. Turn it on in Render, Environment tab:
 
 The redirect URI to register in Google is PUBLIC_URL followed by /v1/auth/google/callback.
 
-Only people already listed under Settings, People can sign in. Google proves who they are. The People list decides who may enter. Once Google works, remove SANDBOX_LOGIN_KEY in Render to switch off the shared access key.
+Only people already listed under Settings, People can sign in. Google proves who they are. The People list decides who may enter. The shared access key has been switched off.
 
 ## Version 0.8
 

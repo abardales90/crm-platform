@@ -15,7 +15,5 @@ services:
         generateValue: true
       - key: DATABASE_URL
         sync: false
-      - key: SANDBOX_LOGIN_KEY
-        generateValue: true
       - key: SANDBOX_TENANT_ID
         sync: false
