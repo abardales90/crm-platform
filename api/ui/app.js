@@ -844,13 +844,16 @@ async function commentsPanel(rec) {
     can('case', 'read') ? api('GET', `/cases/${rec.id}/emails`).then((r) => r.data).catch(() => []) : [],
   ]);
   // Newest first, so the latest message sits right under the box you reply from.
-  const kindOf = (c) => c.via_email ? ['Email', 'ok'] : c.is_public ? ['Note', ''] : ['Internal note', 'warn'];
+  // Messages saved before emails were marked are recognized by matching them to the email log: same words, within two minutes.
+  const wasEmail = (c) => c.via_email || (c.is_public && emails.some((m) => (m.status === 'sent' || m.status === 'received')
+    && Math.abs(new Date(m.created_at) - new Date(c.created_at)) < 120000 && String(m.body).trim().startsWith(String(c.body).trim())));
+  const kindOf = (c) => wasEmail(c) ? ['Email', 'ok'] : c.is_public ? ['Note', ''] : ['Internal note', 'warn'];
   const thread = h('div', { class: 'thread' }, comments.length ? [...comments].reverse().map((c) => {
     const customer = !c.author_user_id;
     const [kind, tone] = kindOf(c);
     return h('div', { class: 'msg ' + (!c.is_public ? 'internal' : customer ? 'customer' : '') },
       h('div', { class: 'who' }, h('span', { class: 'pill ' + tone }, kind), ' ',
-        `${customer ? 'Customer' : userName(c.author_user_id) || 'Agent'}${c.via_email ? (customer ? ' wrote in' : ' sent') : ''} · ${fmtDateTime(c.created_at)}`),
+        `${customer ? 'Customer' : userName(c.author_user_id) || 'Agent'}${wasEmail(c) ? (customer ? ' wrote in' : ' sent') : ''} · ${fmtDateTime(c.created_at)}`),
       h('div', { class: 'body' }, c.body));
   }) : h('div', { class: 'muted' }, 'No messages yet.'));
   let composer = null;

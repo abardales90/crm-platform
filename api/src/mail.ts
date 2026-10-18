@@ -26,7 +26,7 @@ export function caseMailRoutes(app: FastifyInstance, kit: Kit, email: EmailConfi
       if (!UUID.test(id)) throw new ApiError(404, 'not_found', 'Not found');
       await can(db, userId, 'case', 'read');
       const r = await db.query(
-        `SELECT id, to_email, from_email, direction, subject, status, error, sent_at, created_at, created_by FROM email_message
+        `SELECT id, to_email, from_email, direction, subject, body, status, error, sent_at, created_at, created_by FROM email_message
           WHERE case_id = $1 AND deleted_at IS NULL ORDER BY created_at`, [id]);
       return { data: r.rows };
     }));
