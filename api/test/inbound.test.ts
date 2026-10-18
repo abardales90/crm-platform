@@ -52,7 +52,7 @@ describe('inbound email', () => {
     expect(r.body.result).toBe('attached');
     const thread = (await w.call('GET', `/v1/case-comments?case_id=${c.id}`, A())).body.data;
     expect(thread).toHaveLength(1);
-    expect(thread[0]).toMatchObject({ body: 'It is still burning.', is_public: true, author_user_id: null });
+    expect(thread[0]).toMatchObject({ body: 'It is still burning.', is_public: true, author_user_id: null, via_email: true });
     expect((await w.call('GET', `/v1/cases/${c.id}`, A())).body.status).toBe('open');
     const log = (await w.call('GET', `/v1/cases/${c.id}/emails`, A())).body.data;
     expect(log[0]).toMatchObject({ direction: 'in', status: 'received', from_email: 'tony@mail.test' });
@@ -71,6 +71,9 @@ describe('inbound email', () => {
     const row = (await w.sql(`SELECT c.id, c.origin, c.status, c.description, c.queue_id, k.email, k.first_name, k.last_name FROM support_case c JOIN contact k ON k.id = c.contact_id WHERE c.subject = 'Cannot log in' AND c.tenant_id = $1`, [w.tenants.a.id])).rows[0];
     expect(row).toMatchObject({ origin: 'email', status: 'new', description: 'Help, I cannot log in.', email: 'pat@newco.test', first_name: 'Pat', last_name: 'Lee' });
     expect(row.queue_id).toBeTruthy();
+    const first = (await w.call('GET', `/v1/case-comments?case_id=${row.id}`, A())).body.data;
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ body: 'Help, I cannot log in.', via_email: true });
     // The same person writing again uses the same contact.
     await deliver({ from: 'pat@newco.test', subject: 'Another thing', text: 'Second question' });
     expect((await w.sql(`SELECT count(*)::int AS n FROM contact WHERE email = 'pat@newco.test' AND tenant_id = $1`, [w.tenants.a.id])).rows[0].n).toBe(1);
@@ -101,10 +104,19 @@ describe('inbound email', () => {
     expect((await w.sql(`SELECT count(*)::int AS n FROM email_message WHERE tenant_id = $1 AND direction = 'in'`, [w.tenants.b.id])).rows[0].n).toBe(0);
   });
 
+  it('marks a note written by a person as not an email, and people cannot fake the mark', async () => {
+    const c = await newCase();
+    const fake = await w.call('POST', '/v1/case-comments', A('agent'), { case_id: c.id, body: 'Called them', is_public: false, via_email: true });
+    expect(fake.status).toBe(400);
+    const real = (await w.call('POST', '/v1/case-comments', A('agent'), { case_id: c.id, body: 'Called them', is_public: false })).body;
+    expect(real.via_email).toBe(false);
+  });
+
   it('sends each reply with a reply to address that carries the case number', async () => {
     const c = await newCase();
     w.mail.sent.length = 0;
     await w.call('POST', `/v1/cases/${c.id}/reply`, A('agent'), { body: 'On it.' });
+    expect((await w.call('GET', `/v1/case-comments?case_id=${c.id}`, A())).body.data[0].via_email).toBe(true);
     expect(w.mail.sent[0].replyTo).toBe(`support+c${c.case_number}@example.test`);
   });
 

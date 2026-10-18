@@ -1241,3 +1241,7 @@ ALTER TABLE email_message ADD CONSTRAINT email_message_status_check CHECK (statu
 -- The email service may deliver the same message twice. This makes the second one a no-op.
 CREATE UNIQUE INDEX email_message_inbound_uq ON email_message (tenant_id, provider_message_id)
   WHERE direction = 'in' AND provider_message_id IS NOT NULL;
+
+-- 0015 comment channel: marks conversation entries that were an email (sent or received).
+
+ALTER TABLE case_comment ADD COLUMN via_email boolean NOT NULL DEFAULT false;

@@ -19,7 +19,7 @@ export const resources: Resource[] = [
   { path: 'opportunities', table: 'opportunity',    perm: 'opportunity',  writable: true,  readOnlyCols: ['is_closed', 'is_won'], defaultOwner: true, importable: true },
   { path: 'cases',         table: 'support_case',   perm: 'case',         writable: true,
     readOnlyCols: ['case_number', 'opened_at', 'first_response_at', 'resolved_at', 'closed_at', 'first_response_due_at', 'resolution_due_at'], importable: true },
-  { path: 'case-comments', table: 'case_comment',   perm: 'case_comment', writable: true,  readOnlyCols: [] },
+  { path: 'case-comments', table: 'case_comment',   perm: 'case_comment', writable: true,  readOnlyCols: ['via_email'] },
   { path: 'activities',    table: 'activity',       perm: 'activity',     writable: true,  readOnlyCols: [], defaultOwner: true },
   { path: 'pipeline-stages', table: 'pipeline_stage', perm: 'pipeline_stage', writable: false, readOnlyCols: [] },
   { path: 'queues',        table: 'queue',          perm: 'queue',        writable: false, readOnlyCols: [] },

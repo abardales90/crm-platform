@@ -104,10 +104,11 @@ export async function handleReceived(db: Db, m: ReceivedEmail, ownDomain: string
       `INSERT INTO support_case (tenant_id, subject, description, origin, contact_id, account_id, queue_id)
        VALUES ($1, $2, $3, 'email', $4, $5, $6) RETURNING id, status, contact_id`,
       [tenantId, subject.replace(/^(re|fw|fwd):\s*/i, '').trim() || subject, fresh, contactId, accountId, q?.id ?? null])).rows[0];
+    await db.query(`INSERT INTO case_comment (tenant_id, case_id, author_user_id, body, is_public, via_email) VALUES ($1, $2, NULL, $3, true, true)`, [tenantId, c.id, fresh]);
   } else {
     const who = (await db.query(`SELECT email FROM contact WHERE id = $1`, [contactId])).rows[0]?.email;
     const note = who && who.toLowerCase() !== sender ? `From ${sender}:\n\n` : '';
-    await db.query(`INSERT INTO case_comment (tenant_id, case_id, author_user_id, body, is_public) VALUES ($1, $2, NULL, $3, true)`, [tenantId, c.id, note + fresh]);
+    await db.query(`INSERT INTO case_comment (tenant_id, case_id, author_user_id, body, is_public, via_email) VALUES ($1, $2, NULL, $3, true, true)`, [tenantId, c.id, note + fresh]);
     if (['solved', 'closed', 'pending customer'].includes(c.status)) await db.query(`UPDATE support_case SET status = 'open' WHERE id = $1`, [c.id]);
   }
 

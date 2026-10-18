@@ -104,6 +104,10 @@ Only people already listed under Settings, People can sign in. Google proves who
 
 - CSV import now covers deals (the `opportunities` resource) and cases. Accounts, contacts, stages and queues are matched by name in the browser, then sent to the same all or nothing `/import` route. Cases with no assignee go to the queue picked in the dialog. SFDC style status and priority words are translated.
 
+## Version 0.14
+
+- Case conversation layout: reply controls on top, messages below (newest first), each tagged Email, Note or Internal note. Migration 0015 adds `case_comment.via_email`, set by the server only (people cannot set it).
+
 ## Version 0.13
 
 - Email in. Resend sends a signed webhook (`POST /v1/webhooks/resend`) for every message that arrives at the receiving domain. Tally checks the signature (Svix style HMAC, 5 minute window), reads the full message with the Resend API, and either attaches it to a case or opens a new one.

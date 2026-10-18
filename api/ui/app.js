@@ -797,10 +797,14 @@ async function commentsPanel(rec) {
     listAll('/case-comments?case_id=' + rec.id),
     can('case', 'read') ? api('GET', `/cases/${rec.id}/emails`).then((r) => r.data).catch(() => []) : [],
   ]);
-  const thread = h('div', { class: 'thread' }, comments.length ? comments.map((c) => {
+  // Newest first, so the latest message sits right under the box you reply from.
+  const kindOf = (c) => c.via_email ? ['Email', 'ok'] : c.is_public ? ['Note', ''] : ['Internal note', 'warn'];
+  const thread = h('div', { class: 'thread' }, comments.length ? [...comments].reverse().map((c) => {
     const customer = !c.author_user_id;
+    const [kind, tone] = kindOf(c);
     return h('div', { class: 'msg ' + (!c.is_public ? 'internal' : customer ? 'customer' : '') },
-      h('div', { class: 'who' }, `${customer ? 'Customer' : userName(c.author_user_id) || 'Agent'} · ${c.is_public ? (customer ? 'wrote in' : 'public reply') : 'internal note'} · ${fmtDateTime(c.created_at)}`),
+      h('div', { class: 'who' }, h('span', { class: 'pill ' + tone }, kind), ' ',
+        `${customer ? 'Customer' : userName(c.author_user_id) || 'Agent'}${c.via_email ? (customer ? ' wrote in' : ' sent') : ''} · ${fmtDateTime(c.created_at)}`),
       h('div', { class: 'body' }, c.body));
   }) : h('div', { class: 'muted' }, 'No messages yet.'));
   let composer = null;
@@ -809,15 +813,12 @@ async function commentsPanel(rec) {
     const emailOn = !!cache.workspace?.email?.configured;
     const emailOk = emailOn && !!contact?.email && !contact.do_not_contact && can('contact', 'read');
     const modes = [];
-    if (emailOk) modes.push(['email', `Reply by email to ${ENT.contacts.title(contact)}`]);
-    modes.push(['public', emailOk ? 'Post a reply without emailing' : 'Reply to customer (not emailed)'], ['internal', 'Internal note'], ['customer', 'Customer wrote in']);
+    if (emailOk) modes.push(['email', `Send an email to ${ENT.contacts.title(contact)}`]);
+    modes.push(['public', emailOk ? 'Add a note (not emailed)' : 'Add a note for the customer (not emailed)'], ['internal', 'Add an internal note'], ['customer', 'Log a customer message as a note']);
     const mode = selectOf(modes, modes[0][0], { blank: false });
-    const body = h('textarea', { placeholder: 'Write a message' });
+    const body = h('textarea', { placeholder: 'Write a message', style: 'margin-top:10px;width:100%' });
     const subject = h('input', { type: 'text', value: `Re: [Case #${rec.case_number}] ${rec.subject}` });
     const after = selectOf(optList(OPTS.caseStatus), ['new', 'open'].includes(rec.status) ? 'pending customer' : rec.status, { blank: false });
-    const emailRow = h('div', { class: 'inline', style: 'margin-top:8px;align-items:flex-end' },
-      h('label', { class: 'f', style: 'flex:1;min-width:220px' }, h('span', {}, 'Subject'), subject),
-      can('case', 'edit') ? h('label', { class: 'f' }, h('span', {}, 'Then set the case to'), after) : null);
     const send = h('button', { class: 'primary', onclick: async (e) => {
       if (!body.value.trim()) return body.focus();
       e.target.disabled = true;
@@ -833,8 +834,14 @@ async function commentsPanel(rec) {
         }
         await viewDetail('cases', rec.id);
       } catch (err) { toast(errText(err), true); e.target.disabled = false; }
-    } }, modes[0][0] === 'email' ? 'Send email' : 'Send');
-    const sync = () => { const em = mode.value === 'email'; emailRow.hidden = !em; send.textContent = em ? 'Send email' : mode.value === 'internal' ? 'Add note' : 'Save'; };
+    } }, 'Send email');
+    const subjectBox = h('label', { class: 'f', style: 'flex:1;min-width:200px' }, h('span', {}, 'Subject'), subject);
+    const afterBox = can('case', 'edit') ? h('label', { class: 'f' }, h('span', {}, 'Then set the case to'), after) : null;
+    const sync = () => {
+      const em = mode.value === 'email';
+      subjectBox.hidden = !em; if (afterBox) afterBox.hidden = !em;
+      send.textContent = em ? 'Send email' : mode.value === 'internal' ? 'Add internal note' : 'Add note';
+    };
     mode.addEventListener('change', sync);
     sync();
     const why = emailOk ? null
@@ -842,14 +849,17 @@ async function commentsPanel(rec) {
       : !rec.contact_id ? 'Add a contact with an email address to reply by email.'
       : !contact?.email ? 'This contact has no email address, so a reply cannot be emailed.'
       : contact.do_not_contact ? 'This contact is marked Do Not Contact.' : null;
-    composer = h('div', { style: 'margin-top:12px' }, body, emailRow, h('div', { class: 'inline', style: 'margin-top:8px' }, mode, send),
+    composer = h('div', { style: 'margin-bottom:16px' },
+      h('div', { class: 'inline', style: 'align-items:flex-end;gap:10px' },
+        h('label', { class: 'f' }, h('span', {}, 'What do you want to do'), mode), subjectBox, afterBox, send),
+      body,
       why ? h('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' }, why) : null);
   }
   const emailLog = emails.length ? related('Emails', h('div', { class: 'tablewrap' }, h('table', {}, h('tbody', {}, emails.map((m) => h('tr', {},
     h('td', { class: 'muted' }, fmtDateTime(m.sent_at || m.created_at)), h('td', {}, m.direction === 'in' ? 'From ' + m.from_email : 'To ' + m.to_email), h('td', {}, m.subject),
     h('td', {}, h('span', { class: 'pill ' + (m.status === 'sent' || m.status === 'received' ? 'ok' : m.status === 'failed' ? 'bad' : ''), title: m.error || null }, cap(m.status)))))))))
     : null;
-  return h('div', {}, related('Conversation', h('div', {}, thread, composer)), emailLog);
+  return h('div', {}, related('Conversation', h('div', {}, composer, thread)), emailLog);
 }
 
 // ---------- small shared pieces ----------

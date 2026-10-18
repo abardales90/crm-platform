@@ -71,7 +71,7 @@ export function caseMailRoutes(app: FastifyInstance, kit: Kit, email: EmailConfi
       }
       await db.query(`UPDATE email_message SET status = 'sent', sent_at = now(), provider_message_id = $2 WHERE id = $1`, [prep.messageId, provider!.id]);
       const tenantId = (await db.query(`SELECT current_tenant_id() AS t`)).rows[0].t;
-      await db.query(`INSERT INTO case_comment (tenant_id, case_id, author_user_id, body, is_public) VALUES ($1, $2, $3, $4, true)`, [tenantId, id, userId, text]);
+      await db.query(`INSERT INTO case_comment (tenant_id, case_id, author_user_id, body, is_public, via_email) VALUES ($1, $2, $3, $4, true, true)`, [tenantId, id, userId, text]);
       const next = b.status ?? (['new', 'open'].includes(prep.status) ? 'pending customer' : undefined);
       if (next && next !== prep.status) {
         // Setting the status after a reply is a convenience. Without edit access the reply still goes out.

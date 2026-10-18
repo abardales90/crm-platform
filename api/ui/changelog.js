@@ -2,6 +2,15 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.14', date: '2026-10-17', title: 'A clearer case conversation',
+    items: [
+      'On a case, the box to reply now sits at the top: what you want to do, the subject, what to set the case to, and the send button, with the message box under them.',
+      'The conversation is below, newest first. Each message is tagged Email, Note or Internal note.',
+      'The first choice now reads Send an email to the contact. The other choices are Add a note (not emailed), Add an internal note, and Log a customer message as a note.',
+      'Subject and Then set the case to only show when you are sending an email.',
+    ],
+  },
+  {
     id: '0.13', date: '2026-10-17', title: 'Email comes into Tally',
     items: [
       'When a customer replies to an email you sent from a case, the reply now shows up in that case, in the conversation and in the Emails list. A solved, closed or waiting case is set back to Open.',
