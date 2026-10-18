@@ -104,3 +104,7 @@ Only people already listed under Settings, People can sign in. Google proves who
 ## Version 0.10
 
 - CSV import now covers deals (the `opportunities` resource) and cases. Accounts, contacts, stages and queues are matched by name in the browser, then sent to the same all or nothing `/import` route. Cases with no assignee go to the queue picked in the dialog. SFDC style status and priority words are translated.
+
+## Version 0.11
+
+- Import has a value translation step: values in a column that the target field does not accept (stages, status, priority, pick lists, owners, queues) are listed with row counts, and each can be translated or left blank. Near matches (ignoring case and punctuation) are pre filled. Choices are kept in the browser (`localStorage`, per record type).

@@ -2,6 +2,15 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.11', date: '2026-10-17', title: 'Translate values when you import',
+    items: [
+      'After you choose where each column goes, Tally lists any values in your file that it does not recognize, for example a stage name or a priority from another system, with how many rows use each one.',
+      'Pick what each value should become, or Leave blank. This works for stages, status, priority, other pick lists, owners and queues.',
+      'Close matches are filled in for you (CLOSED_WON becomes Closed Won). You can change them.',
+      'Your choices are remembered on this computer, so the next file with the same values is ready straight away.',
+    ],
+  },
+  {
     id: '0.10', date: '2026-10-17', title: 'Import deals and cases',
     items: [
       'Import CSV is now on Deals and Cases too, with the same step where you choose where each column goes.',

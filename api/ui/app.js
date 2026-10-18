@@ -1490,9 +1490,27 @@ function newFieldFor(header, values) {
   return { k: 'custom.' + k, cf: k, l: label, t: KIND_T[kind], newField: { label, kind } };
 }
 // map: one chosen field (or null for "ignore") for each column of the file.
+// Applies the person's translation for a value (for example "Prospecting" becomes a stage that exists here).
+function translated(valueMaps, c, raw) {
+  const m = valueMaps?.[c];
+  const v = String(raw ?? '').trim();
+  return m && Object.prototype.hasOwnProperty.call(m, v) ? m[v] : raw;
+}
+// The values a field accepts, as [text the importer understands, label to show].
+function fieldChoices(f) {
+  switch (f.t) {
+    case 'select': return f.opts.map((o) => [o, cap(o)]);
+    case 'cselect': return f.opts.map((o) => [o, o]);
+    case 'stage': return cache.stages.map((x) => [x.name, x.name]);
+    case 'user': return cache.users.map((u) => [u.email, u.display_name]);
+    case 'assignee': return [...cache.users.map((u) => [u.email, u.display_name]), ...cache.queues.map((q) => [q.name, 'Queue: ' + q.name])];
+    default: return null;
+  }
+}
+const looseKey = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
 // What an import must have for each row. Status, priority and assignee have safe defaults.
 const importNeeds = (f) => f.req && !['status', 'priority', 'assignee'].includes(f.k);
-function planImport(key, table, map) {
+function planImport(key, table, map, valueMaps) {
   const ent = ENT[key];
   const [head, ...data] = table;
   map = map || matchColumns(key, head);
@@ -1506,7 +1524,7 @@ function planImport(key, table, map) {
     const out = {};
     map.forEach((f, c) => {
       if (!f) return;
-      const r = coerceCell(f, cells[c]);
+      const r = coerceCell(f, translated(valueMaps, c, cells[c]));
       if (r.error) problems.push(`Row ${i + 2}: ${r.error}`);
       else if (!r.skip) { if (f.cf) { out.custom = out.custom || {}; out.custom[f.cf] = r.value; } else if (f.t === 'assignee') Object.assign(out, r.value); else out[f.k] = r.value; }
     });
@@ -1525,13 +1543,18 @@ function openImport(key) {
   const file = h('input', { type: 'file', accept: '.csv,text/csv' });
   const template = h('a', { href: '#', onclick: (e) => { e.preventDefault(); downloadCsv(`tally-${key}-template.csv`, ent.fields.map((f) => [f.l, () => '']), []); } }, 'Download a blank template');
   const mapBox = h('div', { class: 'mapbox', hidden: true });
+  const valueBox = h('div', { class: 'mapbox', hidden: true });
+  const lsKey = 'tally_valmap_' + key;
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(lsKey) || '{}'); } catch { saved = {}; }
+  let valueMaps = [];      // per column: { "value in the file": "value to use" }
   const hasDupRule = key === 'accounts' || key === 'contacts';
   const queuePick = key === 'cases' ? selectOf(cache.queues.map((q) => [q.id, q.name]), cache.queues[0]?.id, { blank: false }) : null;
   const result = h('div');
   let choices = [];        // what the person picked for each column: a field, a "new" field, or null
   let table = null;
 
-  const replan = () => { plan = planImport(key, table, choices.map((c) => c)); drawResult(); };
+  const replan = () => { plan = planImport(key, table, choices.map((c) => c), valueMaps); drawResult(); };
   const drawResult = () => {
     const mappedCount = plan.map.filter(Boolean).length;
     fill(result, [
@@ -1541,6 +1564,44 @@ function openImport(key) {
       plan.problems.length ? h('div', { class: 'banner', style: 'margin-top:10px' }, h('b', {}, `${plan.problems.length} problem${plan.problems.length === 1 ? '' : 's'} to fix:`),
         h('ul', { style: 'margin:6px 0 0 18px;padding:0' }, plan.problems.slice(0, 10).map((p) => h('li', {}, p))), plan.problems.length > 10 ? h('div', {}, `and ${plan.problems.length - 10} more`) : null)
         : mappedCount ? h('div', { class: 'pill ok', style: 'margin-top:10px' }, 'Looks good') : h('div', { class: 'banner', style: 'margin-top:10px' }, 'No column is matched to a field yet. Choose where each column should go.')]);
+  };
+  // Values in the file that do not fit the field they are going into, with a way to say what each should become.
+  const drawValues = () => {
+    const [head, ...data] = table;
+    valueMaps = head.map(() => ({}));
+    const groups = [];
+    choices.forEach((f, c) => {
+      const opts = f && !f.newField ? fieldChoices(f) : null;
+      if (!opts) return;
+      const counts = new Map();
+      for (const r of data) { const v = String(r[c] ?? '').trim(); if (v) counts.set(v, (counts.get(v) || 0) + 1); }
+      const bad = [...counts].filter(([v]) => coerceCell(f, v).error);
+      if (!bad.length) return;
+      for (const [v] of bad) {
+        const was = saved[f.k]?.[v];
+        const hit = was !== undefined && (was === '' || opts.some((o) => o[0] === was)) ? was : (opts.find((o) => looseKey(o[0]) === looseKey(v) || looseKey(o[1]) === looseKey(v)) || [])[0];
+        if (hit !== undefined) valueMaps[c][v] = hit;
+      }
+      groups.push({ f, c, opts, bad });
+    });
+    if (!groups.length) { valueBox.hidden = true; fill(valueBox, []); return; }
+    fill(valueBox, [h('div', { class: 'muted', style: 'margin-bottom:6px' }, 'Some values in your file do not match what Tally accepts. Say what each one should become. Your choices are remembered for next time.'),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Field'), h('th', {}, 'Value in your file'), h('th', {}, 'Becomes'))),
+        h('tbody', {}, groups.flatMap(({ f, c, opts, bad }) => bad.map(([v, n]) => {
+          const sl = h('select', {}, h('option', { value: '__none' }, 'Choose…'), h('option', { value: '__blank' }, 'Leave blank'), opts.map(([val, label]) => h('option', { value: 'v:' + val }, label)));
+          const cur = valueMaps[c][v];
+          sl.value = cur === undefined ? '__none' : cur === '' ? '__blank' : 'v:' + cur;
+          sl.addEventListener('change', () => {
+            const x = sl.value;
+            if (x === '__none') delete valueMaps[c][v]; else valueMaps[c][v] = x === '__blank' ? '' : x.slice(2);
+            saved[f.k] = { ...(saved[f.k] || {}) };
+            if (x === '__none') delete saved[f.k][v]; else saved[f.k][v] = valueMaps[c][v];
+            try { localStorage.setItem(lsKey, JSON.stringify(saved)); } catch { /* private mode */ }
+            replan();
+          });
+          return h('tr', {}, h('td', {}, f.l), h('td', {}, v, h('span', { class: 'muted' }, ` (${n} row${n === 1 ? '' : 's'})`)), h('td', {}, sl));
+        }))))]);
+    valueBox.hidden = false;
   };
   const drawMap = () => {
     const [head, ...data] = table;
@@ -1559,7 +1620,7 @@ function openImport(key) {
           sl.value = cur ? (cur.newField ? '__new' : cur.k) : '';
           sl.addEventListener('change', () => {
             choices[i] = sl.value === '' ? null : sl.value === '__new' ? nf : ent.fields.find((f) => f.k === sl.value);
-            replan(); drawMap();
+            drawValues(); replan(); drawMap();
           });
           const clash = cur && !cur.newField && usedByOther(i, cur.k);
           return h('tr', {}, h('td', {}, hd), h('td', { class: 'muted' }, String(example).slice(0, 30)), h('td', {}, sl, clash ? h('span', { class: 'pill bad', style: 'margin-left:6px' }, 'Used twice') : null));
@@ -1567,7 +1628,7 @@ function openImport(key) {
     mapBox.hidden = false;
   };
   file.addEventListener('change', async () => {
-    plan = null; mapBox.hidden = true; fill(result, []);
+    plan = null; mapBox.hidden = true; valueBox.hidden = true; fill(result, []);
     const f = file.files[0];
     if (!f) return;
     if (f.size > 2_000_000) { info.replaceChildren('That file is too large. Keep it under 2 MB.'); return; }
@@ -1575,10 +1636,10 @@ function openImport(key) {
     if (table.length < 2) { info.replaceChildren('That file has no rows to import.'); return; }
     info.replaceChildren();
     choices = matchColumns(key, table[0]);
-    replan(); drawMap();
+    drawValues(); replan(); drawMap();
   });
   modal(`Import ${ent.label.toLowerCase()} from CSV`, h('div', {}, file, h('div', { style: 'margin-top:6px' }, template),
-    info, mapBox, result,
+    info, mapBox, valueBox, result,
     queuePick ? h('label', { class: 'f', style: 'margin-top:12px' }, h('span', {}, 'Rows with no assignee go to this queue'), queuePick) : null,
     hasDupRule ? h('label', { class: 'inline', style: 'margin-top:12px;gap:8px' }, skip, 'Skip rows that already exist (same ' + (key === 'accounts' ? 'domain' : 'email') + ')') : null), [
     { label: 'Cancel' },
