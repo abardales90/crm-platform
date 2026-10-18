@@ -601,7 +601,7 @@ async function viewList(key) {
   setView(
     h('div', { class: 'head' }, titled(key, ent.label),
       h('div', { class: 'tools' }, count, search, exportButton(key, () => shown),
-        ['accounts', 'contacts'].includes(key) && can(ent.perm, 'create') ? h('button', { class: 'small', onclick: () => openImport(key) }, 'Import CSV') : null,
+        ['accounts', 'contacts', 'cases'].includes(key) && can(ent.perm, 'create') ? h('button', { class: 'small', onclick: () => openImport(key) }, 'Import CSV') : null,
         can(ent.perm, 'create') ? h('button', { class: 'primary', onclick: () => openCreate(key) }, 'New ' + ent.one.toLowerCase()) : null)),
     bar.el,
     h('div', { class: 'card tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ent.cols.map((c) => h('th', {}, c[1])))), body), empty));
@@ -662,7 +662,7 @@ async function viewDeals() {
   search.addEventListener('input', draw);
   bar = await viewsBar('deals', deals, search, draw);
   setView(h('div', { class: 'head' }, titled('deals', 'Deals'),
-    h('div', { class: 'tools' }, search, exportButton('deals', () => deals.filter((d) => bar.test(d))), can('opportunity', 'create') ? h('button', { class: 'primary', onclick: () => openCreate('deals') }, 'New deal') : null)), bar.el, board);
+    h('div', { class: 'tools' }, search, exportButton('deals', () => deals.filter((d) => bar.test(d))), can('opportunity', 'create') ? h('button', { class: 'small', onclick: () => openImport('deals') }, 'Import CSV') : null, can('opportunity', 'create') ? h('button', { class: 'primary', onclick: () => openCreate('deals') }, 'New deal') : null)), bar.el, board);
   bar.start();
   draw();
 }
@@ -1386,6 +1386,8 @@ const exportButton = (key, getRows) => h('button', { class: 'small', onclick: ()
 // Other names people use for the same column in a spreadsheet.
 const IMPORT_ALIASES = {
   accounts: { name: ['accountname', 'company', 'companyname', 'organization'], domain: ['website domain'], annual_revenue: ['revenue'], number_of_employees: ['employees', 'employeecount', 'size'], description: ['notes', 'note', 'description'], owner_user_id: ['owner', 'accountowner', 'owneremail'] },
+  deals: { name: ['opportunityname', 'dealname', 'opportunity'], account_id: ['accountname', 'account', 'company', 'companyname'], primary_contact_id: ['primarycontact', 'contactname', 'contact'], stage_id: ['stage', 'stagename'], amount: ['amount', 'value', 'dealvalue'], close_date: ['closedate', 'expectedclosedate', 'expectedclose'], forecast_category: ['forecastcategory', 'forecastcategoryname', 'forecast'], next_step: ['nextstep'], lead_source: ['leadsource', 'source'], owner_user_id: ['owner', 'opportunityowner', 'dealowner', 'owneremail'], description: ['notes', 'note'] },
+  cases: { subject: ['title', 'casesubject'], status: ['casestatus'], priority: ['casepriority'], type: ['casetype'], origin: ['caseorigin', 'source', 'channel'], assignee: ['caseowner', 'owner', 'assignedto', 'assignee', 'queue'], account_id: ['accountname', 'account', 'company', 'companyname'], contact_id: ['contactname', 'contact', 'contactemail', 'contact email'] },
   contacts: { last_name: ['lastname', 'surname', 'last'], first_name: ['firstname', 'first', 'givenname'], email: ['emailaddress', 'mail'], title: ['jobtitle', 'position'], account_id: ['account', 'accountname', 'company', 'companyname'], owner_user_id: ['owner', 'contactowner', 'owneremail'], description: ['notes', 'note'] },
 };
 const normHead = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -1401,6 +1403,11 @@ function matchColumns(key, headers) {
   });
 }
 // Turns one cell into the value the server expects, or says what is wrong with it.
+// Words other systems (SFDC for one) use for the same thing.
+const SELECT_SYNONYMS = {
+  status: { working: 'open', 'in progress': 'open', 'on hold': 'pending customer', waiting: 'pending customer', resolved: 'solved' },
+  priority: { medium: 'normal', critical: 'urgent', standard: 'normal' },
+};
 function coerceCell(f, raw) {
   let s = String(raw ?? '').trim();
   if (s === '') return { skip: true };
@@ -1428,7 +1435,7 @@ function coerceCell(f, raw) {
       return hit ? { value: hit } : { error: `${f.l} must be one of: ${f.opts.join(', ')}` };
     }
     case 'select': {
-      const v = s.toLowerCase();
+      const v = (SELECT_SYNONYMS[f.k]?.[s.toLowerCase()] ?? s.toLowerCase());
       return f.opts.includes(v) ? { value: v } : { error: `${f.l} must be one of: ${f.opts.join(', ')}` };
     }
     case 'user': {
@@ -1437,8 +1444,26 @@ function coerceCell(f, raw) {
       return u ? { value: u.id } : { error: `Owner "${s}" is not a person in Tally. Use their email` };
     }
     case 'account': {
-      const a = cache.accounts.find((x) => x.name.toLowerCase() === s.toLowerCase());
-      return a ? { value: a.id } : { error: `Account "${s}" was not found. Import accounts first` };
+      const hits = cache.accounts.filter((x) => x.name.toLowerCase() === s.toLowerCase());
+      if (hits.length > 1) return { error: `More than one account is named "${s}". Rename one of them first, then import again` };
+      return hits[0] ? { value: hits[0].id } : { error: `Account "${s}" was not found. Import accounts first` };
+    }
+    case 'contact': {
+      const v = s.toLowerCase();
+      const hits = cache.contacts.filter((x) => (x.email || '').toLowerCase() === v || ENT.contacts.title(x).toLowerCase() === v);
+      if (hits.length > 1) return { error: `More than one contact is named "${s}". Use their email address instead` };
+      return hits[0] ? { value: hits[0].id } : { error: `Contact "${s}" was not found. Import contacts first` };
+    }
+    case 'stage': {
+      const st = cache.stages.find((x) => x.name.toLowerCase() === s.toLowerCase());
+      return st ? { value: st.id } : { error: `Stage "${s}" is not one of: ${cache.stages.map((x) => x.name).join(', ')}` };
+    }
+    case 'assignee': {
+      const v = s.toLowerCase();
+      const u = cache.users.find((x) => x.email.toLowerCase() === v || x.display_name.toLowerCase() === v);
+      if (u) return { value: { owner_user_id: u.id, queue_id: null } };
+      const q = cache.queues.find((x) => x.name.toLowerCase() === v);
+      return q ? { value: { owner_user_id: null, queue_id: q.id } } : { error: `"${s}" is not a person or a queue in Tally. Use their email, or the queue name` };
     }
     default:
       if (f.k === 'email') return { value: s.toLowerCase() };
@@ -1465,6 +1490,8 @@ function newFieldFor(header, values) {
   return { k: 'custom.' + k, cf: k, l: label, t: KIND_T[kind], newField: { label, kind } };
 }
 // map: one chosen field (or null for "ignore") for each column of the file.
+// What an import must have for each row. Status, priority and assignee have safe defaults.
+const importNeeds = (f) => f.req && !['status', 'priority', 'assignee'].includes(f.k);
 function planImport(key, table, map) {
   const ent = ENT[key];
   const [head, ...data] = table;
@@ -1473,16 +1500,18 @@ function planImport(key, table, map) {
   const mappedKeys = map.filter(Boolean).map((f) => f.k);
   const seen = new Set();
   for (const f of map.filter(Boolean)) { if (seen.has(f.k)) problems.push(`Two columns are going into "${f.l}". Pick one of them and set the other to ignore`); seen.add(f.k); }
-  for (const f of ent.fields.filter((x) => x.req)) if (!mappedKeys.includes(f.k)) problems.push(`No column is going into "${f.l}". It is required`);
+  const needed = ent.fields.filter(importNeeds);
+  for (const f of needed) if (!mappedKeys.includes(f.k)) problems.push(`No column is going into "${f.l}". It is required`);
   data.forEach((cells, i) => {
     const out = {};
     map.forEach((f, c) => {
       if (!f) return;
       const r = coerceCell(f, cells[c]);
       if (r.error) problems.push(`Row ${i + 2}: ${r.error}`);
-      else if (!r.skip) { if (f.cf) { out.custom = out.custom || {}; out.custom[f.cf] = r.value; } else out[f.k] = r.value; }
+      else if (!r.skip) { if (f.cf) { out.custom = out.custom || {}; out.custom[f.cf] = r.value; } else if (f.t === 'assignee') Object.assign(out, r.value); else out[f.k] = r.value; }
     });
-    for (const f of ent.fields.filter((x) => x.req)) if (mappedKeys.includes(f.k) && (f.cf ? out.custom?.[f.cf] : out[f.k]) === undefined && !problems.some((p) => p.startsWith(`Row ${i + 2}:`))) problems.push(`Row ${i + 2}: ${f.l} is empty`);
+    if (key === 'deals' && out.stage_id && stageOf(out.stage_id)?.is_closed && !stageOf(out.stage_id).is_won && !out.loss_reason && !problems.some((p) => p.startsWith(`Row ${i + 2}:`))) problems.push(`Row ${i + 2}: a deal in a lost stage needs a Loss reason`);
+    for (const f of needed) if (mappedKeys.includes(f.k) && (f.cf ? out.custom?.[f.cf] : out[f.k]) === undefined && !problems.some((p) => p.startsWith(`Row ${i + 2}:`))) problems.push(`Row ${i + 2}: ${f.l} is empty`);
     rows.push(out);
   });
   return { map, head, rows, problems, table };
@@ -1496,6 +1525,8 @@ function openImport(key) {
   const file = h('input', { type: 'file', accept: '.csv,text/csv' });
   const template = h('a', { href: '#', onclick: (e) => { e.preventDefault(); downloadCsv(`tally-${key}-template.csv`, ent.fields.map((f) => [f.l, () => '']), []); } }, 'Download a blank template');
   const mapBox = h('div', { class: 'mapbox', hidden: true });
+  const hasDupRule = key === 'accounts' || key === 'contacts';
+  const queuePick = key === 'cases' ? selectOf(cache.queues.map((q) => [q.id, q.name]), cache.queues[0]?.id, { blank: false }) : null;
   const result = h('div');
   let choices = [];        // what the person picked for each column: a field, a "new" field, or null
   let table = null;
@@ -1521,7 +1552,7 @@ function openImport(key) {
           const example = (data.find((r) => String(r[i] ?? '').trim()) || [])[i] ?? '';
           const nf = canMakeFields && !ent.fields.some((f) => f.k === 'custom.' + fieldKey(String(hd).trim().slice(0, 60))) ? newFieldFor(hd, data.map((r) => r[i])) : null;
           const sl = h('select', {}, h('option', { value: '' }, 'Ignore this column'),
-            h('optgroup', { label: 'Standard fields' }, std.map((f) => h('option', { value: f.k }, f.l + (f.req ? ' *' : '')))),
+            h('optgroup', { label: 'Standard fields' }, std.map((f) => h('option', { value: f.k }, f.l + (importNeeds(f) ? ' *' : '')))),
             cust.length ? h('optgroup', { label: 'Custom fields' }, cust.map((f) => h('option', { value: f.k }, f.l + (f.req ? ' *' : '')))) : null,
             nf ? h('optgroup', { label: 'New' }, h('option', { value: '__new' }, `Create a custom field "${nf.l}" (${kindLabels[nf.newField.kind]})`)) : null);
           const cur = choices[i];
@@ -1547,7 +1578,9 @@ function openImport(key) {
     replan(); drawMap();
   });
   modal(`Import ${ent.label.toLowerCase()} from CSV`, h('div', {}, file, h('div', { style: 'margin-top:6px' }, template),
-    info, mapBox, result, h('label', { class: 'inline', style: 'margin-top:12px;gap:8px' }, skip, 'Skip rows that already exist (same ' + (key === 'accounts' ? 'domain' : 'email') + ')')), [
+    info, mapBox, result,
+    queuePick ? h('label', { class: 'f', style: 'margin-top:12px' }, h('span', {}, 'Rows with no assignee go to this queue'), queuePick) : null,
+    hasDupRule ? h('label', { class: 'inline', style: 'margin-top:12px;gap:8px' }, skip, 'Skip rows that already exist (same ' + (key === 'accounts' ? 'domain' : 'email') + ')') : null), [
     { label: 'Cancel' },
     { label: 'Import', primary: true, run: async (dlg) => {
       if (!plan) throw new ApiErr(400, { message: 'Choose a CSV file first' });
@@ -1562,7 +1595,8 @@ function openImport(key) {
         applyCustomFields((await api('GET', '/settings/custom-fields')).data);
       }
       let res;
-      try { res = await api('POST', `/${ent.path}/import`, { rows: plan.rows, skip_duplicates: skip.checked }); }
+      const rowsOut = queuePick ? plan.rows.map((r) => (r.owner_user_id || r.queue_id) ? r : { ...r, queue_id: queuePick.value }) : plan.rows;
+      try { res = await api('POST', `/${ent.path}/import`, { rows: rowsOut, skip_duplicates: skip.checked }); }
       catch (e) {
         const list = e.details?.errors;
         if (list) throw new ApiErr(422, { message: `${e.message}. ` + list.slice(0, 5).map((x) => `Row ${x.row + 1}: ${x.message}`).join('. ') + (fresh.size ? '. The new custom fields were already added, so they will be there when you try again.' : '') });

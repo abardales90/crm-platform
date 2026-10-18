@@ -100,3 +100,7 @@ Only people already listed under Settings, People can sign in. Google proves who
 ## Version 0.9
 
 - CSV import has a column mapping step: each column of the file is shown with the field it will fill (standard or custom), and can be changed or ignored. Admins can create a custom field from a column, with the kind guessed from its values. Two columns cannot fill the same field.
+
+## Version 0.10
+
+- CSV import now covers deals (the `opportunities` resource) and cases. Accounts, contacts, stages and queues are matched by name in the browser, then sent to the same all or nothing `/import` route. Cases with no assignee go to the queue picked in the dialog. SFDC style status and priority words are translated.

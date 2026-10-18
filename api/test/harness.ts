@@ -20,6 +20,7 @@ export async function setup() {
   await admin.connect();
   await admin.query(`DROP DATABASE IF EXISTS ${DBNAME}`);
   await admin.query(`CREATE DATABASE ${DBNAME}`);
+  await admin.query(`ALTER DATABASE ${DBNAME} SET timezone = 'UTC'`); // same as the hosted database, so dates agree with the tests at any hour
   const dbUrl = (user: string) => ADMIN.replace('/postgres?', `/${DBNAME}?`).replace('//postgres@', `//${user}@`);
   const root = new pg.Client({ connectionString: dbUrl('postgres') });
   await root.connect();

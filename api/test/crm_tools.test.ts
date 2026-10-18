@@ -395,3 +395,70 @@ describe('saved views', () => {
     expect((await w.call('GET', '/v1/views?object=accounts', {})).status).toBe(401);
   });
 });
+
+describe('bulk import of deals and cases', () => {
+  const imp = (path: string, body: unknown, who = A()) => w.call('POST', `/v1/${path}/import`, who, body);
+  let acct = '', stage = '', lost = '', queue = '';
+  beforeAll(async () => {
+    acct = (await w.call('POST', '/v1/accounts', A(), { name: 'Deal Import Co' })).body.id;
+    const stages = (await w.call('GET', '/v1/pipeline-stages', A())).body.data;
+    stage = stages.find((s: any) => !s.is_closed).id;
+    lost = stages.find((s: any) => s.is_closed && !s.is_won).id;
+    queue = (await w.call('GET', '/v1/queues', A())).body.data[0].id;
+  });
+
+  it('imports deals, filling in the owner and the stage probability', async () => {
+    const r = await imp('opportunities', { rows: [
+      { name: 'Imp Deal 1', account_id: acct, stage_id: stage, close_date: '2026-12-01', amount: 1000 },
+      { name: 'Imp Deal 2', account_id: acct, stage_id: stage, close_date: '2026-12-02', custom: {} }] });
+    expect(r.status).toBe(201);
+    expect(r.body.created).toBe(2);
+    const d = (await w.call('GET', '/v1/opportunities', A())).body.data.filter((x: any) => x.name.startsWith('Imp Deal'));
+    expect(d).toHaveLength(2);
+    expect(d.every((x: any) => x.owner_user_id === w.tenants.a.users.admin && x.probability >= 0)).toBe(true);
+  });
+
+  it('is all or nothing for deals, and names the problem on each row', async () => {
+    const r = await imp('opportunities', { rows: [
+      { name: 'Should Not Exist 1', account_id: acct, stage_id: stage, close_date: '2026-12-01' },
+      { name: 'No Account', stage_id: stage, close_date: '2026-12-01' },
+      { name: 'Lost With No Reason', account_id: acct, stage_id: lost, close_date: '2026-12-01' },
+      { name: 'Bad Date', account_id: acct, stage_id: stage, close_date: 'soon' }] });
+    expect(r.status).toBe(422);
+    expect(r.body.error.details.errors.map((e: any) => e.row)).toEqual([2, 3, 4]);
+    expect((await w.call('GET', '/v1/opportunities', A())).body.data.map((x: any) => x.name)).not.toContain('Should Not Exist 1');
+  });
+
+  it('accepts a lost deal when a reason is given, and will not use another company\'s account', async () => {
+    expect((await imp('opportunities', { rows: [{ name: 'Imp Lost', account_id: acct, stage_id: lost, close_date: '2026-01-01', loss_reason: 'price' }] })).body.created).toBe(1);
+    const other = (await w.call('POST', '/v1/accounts', B(), { name: 'Not Yours' })).body.id;
+    const r = await imp('opportunities', { rows: [{ name: 'Sneaky', account_id: other, stage_id: stage, close_date: '2026-12-01' }] });
+    expect(r.status).toBe(422);
+  });
+
+  it('imports cases with numbers and deadlines set by the system', async () => {
+    const r = await imp('cases', { rows: [
+      { subject: 'Imp Case 1', queue_id: queue, description: 'from the old system', priority: 'high', status: 'open' },
+      { subject: 'Imp Case 2', owner_user_id: w.tenants.a.users.agent, account_id: acct, status: 'closed' }] });
+    expect(r.status).toBe(201);
+    const c = (await w.call('GET', '/v1/cases', A())).body.data.filter((x: any) => x.subject.startsWith('Imp Case')).sort((a: any, b: any) => a.case_number - b.case_number);
+    expect(c).toHaveLength(2);
+    expect(c[1].case_number).toBe(c[0].case_number + 1);
+    expect(c[0].resolution_due_at).toBeTruthy();
+    expect(c[1].owner_user_id).toBe(w.tenants.a.users.agent);
+  });
+
+  it('refuses case rows with no assignee, a bad status, or system fields', async () => {
+    const r = await imp('cases', { rows: [
+      { subject: 'Nobody' }, { subject: 'Bad', queue_id: queue, status: 'working' }, { subject: 'Number', queue_id: queue, case_number: 5 }, { subject: 'Both', queue_id: queue, owner_user_id: w.tenants.a.users.agent }] });
+    expect(r.status).toBe(422);
+    expect(r.body.error.details.errors.map((e: any) => e.row)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('needs permission, and respects the other company', async () => {
+    const me = (await w.call('GET', '/v1/me', A('finance'))).body.permissions;
+    expect((await imp('opportunities', { rows: [{ name: 'x' }] }, A('finance'))).status).toBe(me.opportunity?.includes('create') ? 422 : 403);
+    expect((await imp('cases', { rows: [{ subject: 'x', queue_id: queue }] }, B())).status).toBe(422);
+    expect((await w.call('POST', '/v1/opportunities/import', {}, { rows: [] })).status).toBe(401);
+  });
+});

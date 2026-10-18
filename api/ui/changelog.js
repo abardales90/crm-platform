@@ -2,6 +2,16 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.10', date: '2026-10-17', title: 'Import deals and cases',
+    items: [
+      'Import CSV is now on Deals and Cases too, with the same step where you choose where each column goes.',
+      'Deals: columns can fill the deal name, account, primary contact, stage, amount, close date, owner and your custom fields. Accounts, contacts and stages are matched by name, and contacts also by email.',
+      'Cases: the status and priority words used by other systems are understood (Working becomes Open, Medium becomes Normal). Case numbers and reply deadlines are set for you.',
+      'Cases with no assignee go to the queue you choose in the import window.',
+      'A lost deal with no loss reason, a stage that does not exist, or an account that cannot be found are listed by row before anything is saved. If one row is wrong, nothing is imported.',
+    ],
+  },
+  {
     id: '0.9', date: '2026-10-17', title: 'Choose where each column goes when you import',
     items: [
       'Import CSV now shows every column in your file next to the field it will go into. Change any of them, or set a column to Ignore.',
