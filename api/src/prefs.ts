@@ -4,7 +4,7 @@ import { ApiError } from './errors.js';
 
 export const ACCENTS = ['green', 'blue', 'purple', 'orange', 'rose', 'slate'];
 
-const COLS = `accent, tour_done_at, last_seen_release, nav_order, nav_collapsed`;
+const COLS = `accent, tour_done_at, last_seen_release, nav_order, nav_collapsed, email_signature`;
 
 // A person's own look and welcome state. Needs no special permission, and only ever touches the caller's row.
 export function prefRoutes(app: FastifyInstance, kit: Kit) {
@@ -13,7 +13,7 @@ export function prefRoutes(app: FastifyInstance, kit: Kit) {
   app.get('/v1/me/preferences', async (req) =>
     authed(req, async (db, userId) => {
       const r = await db.query(`SELECT ${COLS} FROM user_preference WHERE user_id = $1`, [userId]);
-      return r.rows[0] ?? { accent: null, tour_done_at: null, last_seen_release: null, nav_order: null, nav_collapsed: false };
+      return r.rows[0] ?? { accent: null, tour_done_at: null, last_seen_release: null, nav_order: null, nav_collapsed: false, email_signature: null };
     }));
 
   app.put('/v1/me/preferences', async (req) =>
@@ -39,6 +39,12 @@ export function prefRoutes(app: FastifyInstance, kit: Kit) {
       if (b.nav_collapsed !== undefined) {
         if (typeof b.nav_collapsed !== 'boolean') throw new ApiError(400, 'bad_request', 'nav_collapsed must be true or false');
         vals.push(b.nav_collapsed); sets.push(`nav_collapsed = $${vals.length + 2}`);
+      }
+      if (b.email_signature !== undefined) {
+        const sig = b.email_signature;
+        if (sig !== null && (typeof sig !== 'string' || sig.length > 1000)) throw new ApiError(400, 'bad_request', 'A signature can be up to 1000 characters');
+        const clean = typeof sig === 'string' ? sig.replace(/\r\n/g, '\n').trim() : '';
+        vals.push(clean || null); sets.push(`email_signature = $${vals.length + 2}`);
       }
       if (!sets.length) throw new ApiError(400, 'bad_request', 'Nothing to save');
       const tenantId = (await db.query(`SELECT current_tenant_id() AS t`)).rows[0].t;

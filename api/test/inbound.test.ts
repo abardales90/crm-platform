@@ -126,3 +126,68 @@ describe('inbound email', () => {
     expect(newPartOf('> only quoted')).toBe('> only quoted');
   });
 });
+
+describe('signatures and contact conversations', () => {
+  let contact: string; let queue: string;
+  beforeAll(async () => {
+    queue = (await w.call('GET', '/v1/queues', A())).body.data[0].id;
+    contact = (await w.call('POST', '/v1/contacts', A(), { last_name: 'Rivera', first_name: 'Dana', email: 'dana@conv.test' })).body.id;
+  });
+
+  it('puts each person\'s own signature under their emails, and their name when they have none', async () => {
+    const c = (await w.call('POST', '/v1/cases', A('agent'), { subject: 'Sig check', queue_id: queue, contact_id: contact })).body;
+    w.mail.sent.length = 0;
+    await w.call('POST', `/v1/cases/${c.id}/reply`, A('agent'), { body: 'Hello' });
+    expect(w.mail.sent[0].text).toBe('Hello\n\nagent');
+    const saved = await w.call('PUT', '/v1/me/preferences', A('agent'), { email_signature: 'Kind regards,\r\nAgent Smith\r\nSupport' });
+    expect(saved.body.email_signature).toBe('Kind regards,\nAgent Smith\nSupport');
+    await w.call('POST', `/v1/cases/${c.id}/reply`, A('agent'), { body: 'Again' });
+    expect(w.mail.sent[1].text).toBe('Again\n\nKind regards,\nAgent Smith\nSupport');
+    // It is only theirs: the admin's emails are unchanged.
+    await w.call('POST', `/v1/cases/${c.id}/reply`, A(), { body: 'From admin' });
+    expect(w.mail.sent[2].text).toBe('From admin\n\nAdmin a');
+    expect((await w.call('PUT', '/v1/me/preferences', A('agent'), { email_signature: 'x'.repeat(1001) })).status).toBe(400);
+    expect((await w.call('PUT', '/v1/me/preferences', A('agent'), { email_signature: '  ' })).body.email_signature).toBeNull();
+  });
+
+  it('sends an email from the contact page, keeps the thread, and files the reply under the contact with no new case', async () => {
+    w.mail.sent.length = 0;
+    const cases = async () => (await w.sql(`SELECT count(*)::int AS n FROM support_case WHERE tenant_id = $1`, [w.tenants.a.id])).rows[0].n;
+    const before = await cases();
+    const r = await w.call('POST', `/v1/contacts/${contact}/email`, A('sales'), { subject: 'Quick question', body: 'Do you have a minute?' });
+    expect(r.status).toBe(201);
+    expect(w.mail.sent[0]).toMatchObject({ to: 'dana@conv.test', subject: 'Quick question' });
+    expect(w.mail.sent[0].replyTo).toBe(`support+t${contact.replace(/-/g, '')}@example.test`);
+    const back = await deliver({ from: 'Dana Rivera <dana@conv.test>', to: [w.mail.sent[0].replyTo!], subject: 'Re: Quick question',
+      text: 'Yes, call me.\n\nOn Tue, Oct 13, 2026 Sales wrote:\n> Do you have a minute?' });
+    expect(back.body.result).toBe('contact');
+    expect(await cases()).toBe(before);
+    const all = (await w.call('GET', `/v1/contacts/${contact}/emails`, A('sales'))).body.data;
+    expect(all.some((m: any) => m.case_id)).toBe(true); // the case emails from the first test are in the same list
+    const thread = all.filter((m: any) => !m.case_id);
+    expect(thread.map((m: any) => [m.direction, m.subject])).toEqual([['in', 'Re: Quick question'], ['out', 'Quick question']]);
+    expect(thread[0].body).toBe('Yes, call me.');
+    expect(thread[0].case_id).toBeNull();
+  });
+
+  it('shows the emails from the contact\'s cases in the same conversation, with the case number', async () => {
+    const c = (await w.call('POST', '/v1/cases', A('agent'), { subject: 'Case mail', queue_id: queue, contact_id: contact })).body;
+    await w.call('POST', `/v1/cases/${c.id}/reply`, A('agent'), { body: 'About your case' });
+    const thread = (await w.call('GET', `/v1/contacts/${contact}/emails`, A())).body.data;
+    expect(thread.find((m: any) => m.case_id === c.id)).toMatchObject({ case_number: c.case_number, direction: 'out' });
+  });
+
+  it('will not email a contact with no address or marked Do Not Contact, and needs a subject', async () => {
+    const none = (await w.call('POST', '/v1/contacts', A(), { last_name: 'Quiet' })).body.id;
+    const dnc = (await w.call('POST', '/v1/contacts', A(), { last_name: 'Nope', email: 'nope@conv.test', do_not_contact: true })).body.id;
+    expect((await w.call('POST', `/v1/contacts/${none}/email`, A(), { subject: 'Hi', body: 'x' })).body.error.code).toBe('no_email');
+    expect((await w.call('POST', `/v1/contacts/${dnc}/email`, A(), { subject: 'Hi', body: 'x' })).body.error.code).toBe('do_not_contact');
+    expect((await w.call('POST', `/v1/contacts/${contact}/email`, A(), { subject: ' ', body: 'x' })).status).toBe(400);
+    expect((await w.call('POST', `/v1/contacts/${contact}/email`, A('agent'), { subject: 'Hi', body: ' ' })).status).toBe(400);
+  });
+
+  it('keeps tenant B out of tenant A\'s contact conversations', async () => {
+    expect((await w.call('GET', `/v1/contacts/${contact}/emails`, w.as('b', 'admin'))).body.data).toEqual([]);
+    expect((await w.call('POST', `/v1/contacts/${contact}/email`, w.as('b', 'admin'), { subject: 'Hi', body: 'x' })).status).toBe(404);
+  });
+});

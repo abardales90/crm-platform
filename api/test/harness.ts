@@ -66,7 +66,7 @@ export async function setup() {
   const inbox: Record<string, ReceivedEmail> = {};
   initPool(dbUrl('api_test_login'));
   const app = buildApp({ jwtSecret: SECRET, sandboxLogin: { key: LOGIN_KEY, tenantId: tenants.a.id },
-    email: { send: fakeSend, from: 'Support <support@example.test>', caseReplyTo: (n) => `support+c${n}@example.test` },
+    email: { send: fakeSend, from: 'Support <support@example.test>', caseReplyTo: (n) => `support+c${n}@example.test`, contactReplyTo: (id) => `support+t${id.replace(/-/g, '')}@example.test` },
     inbound: { secret: WEBHOOK_SECRET, apiKey: 'unused', tenantId: tenants.a.id, fetchEmail: async (id) => { if (!inbox[id]) throw new Error('no such message'); return inbox[id]; } },
     google: { clientId: 'test-client', clientSecret: 'test-secret', tenantId: tenants.a.id, publicUrl: 'https://crm.example.test',
       // The test "code" is a JSON note of what Google would say about the person. Everything else is checked by the real code.

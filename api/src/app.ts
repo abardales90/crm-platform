@@ -8,7 +8,7 @@ import { resources, columnsOf, isSystemCol, alwaysVisible, type Resource } from 
 import type { EmailConfig } from './email.js';
 import { reportRoutes } from './reports.js';
 import { settingsRoutes } from './settings.js';
-import { caseMailRoutes } from './mail.js';
+import { caseMailRoutes, contactMailRoutes } from './mail.js';
 import { inboundRoutes, type InboundConfig } from './inbound.js';
 import { prefRoutes } from './prefs.js';
 import { googleRoutes, type GoogleConfig } from './google.js';
@@ -158,6 +158,7 @@ export function buildApp(opts: {
   reportRoutes(app, kit);
   settingsRoutes(app, kit, opts.email, { google: !!opts.google, key: !!opts.sandboxLogin });
   caseMailRoutes(app, kit, opts.email);
+  contactMailRoutes(app, kit, opts.email);
   inboundRoutes(app, opts.inbound, (opts.email?.from ?? '').match(/@([^>\s]+)>?\s*$/)?.[1]?.toLowerCase() ?? '');
   prefRoutes(app, kit);
   searchRoutes(app, kit);

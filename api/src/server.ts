@@ -19,6 +19,7 @@ const app = buildApp({
   email: config.resendApiKey ? {
     send: resendSender(config.resendApiKey), from: config.emailFrom, replyTo: config.emailReplyTo || undefined,
     // With inbound turned on, each reply-to carries the case number, like support+c123@yourdomain.com.
+    contactReplyTo: config.resendWebhookSecret ? ((id: string) => addressOf(config.emailFrom).replace(/^([^@]+)@/, `$1+t${id.replace(/-/g, '')}@`)) : undefined,
     caseReplyTo: config.resendWebhookSecret ? ((n: number) => addressOf(config.emailFrom).replace(/^([^@]+)@/, `$1+c${n}@`)) : undefined,
   } : undefined,
   inbound: config.resendWebhookSecret ? { secret: config.resendWebhookSecret, apiKey: config.resendApiKey, tenantId: config.sandboxTenantId } : undefined,

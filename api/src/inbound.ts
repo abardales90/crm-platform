@@ -83,6 +83,18 @@ export async function handleReceived(db: Db, m: ReceivedEmail, ownDomain: string
 
   // Which case is this about? The case number in the subject, or the number tucked into the address we sent from.
   const num = subject.match(/\[Case #(\d+)\]/i)?.[1] ?? (m.to ?? []).map((t) => addressOf(t).match(/\+c(\d+)@/i)?.[1]).find(Boolean);
+  // A reply to an email sent from a contact page carries the contact in the address (support+t<id>@...). No case is opened for it.
+  const tag = (m.to ?? []).map((t) => addressOf(t).match(/\+t([0-9a-f]{32})@/i)?.[1]).find(Boolean)?.toLowerCase();
+  if (!num && tag) {
+    const cid = tag.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
+    const ct = (await db.query(`SELECT id FROM contact WHERE id = $1 AND deleted_at IS NULL`, [cid])).rows[0];
+    if (ct) {
+      await db.query(
+        `INSERT INTO email_message (tenant_id, contact_id, to_email, from_email, subject, body, status, direction, provider_message_id, sent_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'received', 'in', $7, now())`, [tenantId, ct.id, toAddr, sender, subject, full, m.id]);
+      return 'contact' as const;
+    }
+  }
   let c = num ? (await db.query(`SELECT id, status, contact_id FROM support_case WHERE case_number = $1 AND deleted_at IS NULL`, [Number(num)])).rows[0] : undefined;
 
   let contactId: string | null = c?.contact_id ?? null;

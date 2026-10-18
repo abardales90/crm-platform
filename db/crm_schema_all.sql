@@ -1245,3 +1245,7 @@ CREATE UNIQUE INDEX email_message_inbound_uq ON email_message (tenant_id, provid
 -- 0015 comment channel: marks conversation entries that were an email (sent or received).
 
 ALTER TABLE case_comment ADD COLUMN via_email boolean NOT NULL DEFAULT false;
+
+-- 0016 email signature: each person's own signature, added to the bottom of emails they send.
+
+ALTER TABLE user_preference ADD COLUMN email_signature text CHECK (length(email_signature) <= 1000);

@@ -104,6 +104,11 @@ Only people already listed under Settings, People can sign in. Google proves who
 
 - CSV import now covers deals (the `opportunities` resource) and cases. Accounts, contacts, stages and queues are matched by name in the browser, then sent to the same all or nothing `/import` route. Cases with no assignee go to the queue picked in the dialog. SFDC style status and priority words are translated.
 
+## Version 0.15
+
+- Per person email signature (`user_preference.email_signature`, migration 0016, edited at `PUT /v1/me/preferences`, no special permission). Used on case replies and contact emails; falls back to the person's name.
+- Contact conversations: `GET /v1/contacts/:id/emails` (case emails included when the viewer may read cases) and `POST /v1/contacts/:id/email`. Replies to these use `name+t<contact id>@domain` as Reply-To and are filed under the contact, with no new case.
+
 ## Version 0.14
 
 - Case conversation layout: reply controls on top, messages below (newest first), each tagged Email, Note or Internal note. Migration 0015 adds `case_comment.via_email`, set by the server only (people cannot set it).

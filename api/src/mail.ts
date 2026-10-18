@@ -2,12 +2,21 @@ import type { FastifyInstance } from 'fastify';
 import { type Kit, UUID } from './kit.js';
 import { ApiError } from './errors.js';
 import { EmailError, type EmailConfig } from './email.js';
+import type { Db } from './db.js';
+import { newPartOf } from './inbound.js';
 
 const STATUSES = ['new', 'open', 'pending customer', 'escalated', 'solved', 'closed'];
 
 // Reply to a customer by email from a case.
 // 1. check everything and write a "queued" record, 2. send with no database transaction held open,
 // 3. record the outcome. A failed send never leaves a public reply behind.
+// The person sending, and what goes under their message: their own signature, or just their name if they have none.
+export async function senderOf(db: Db, userId: string) {
+  const me = (await db.query(
+    `SELECT u.display_name, p.email_signature FROM app_user u LEFT JOIN user_preference p ON p.user_id = u.id WHERE u.id = $1`, [userId])).rows[0];
+  return { name: me.display_name as string, sign: ((me.email_signature as string | null)?.trim() || me.display_name) as string };
+}
+
 export function caseMailRoutes(app: FastifyInstance, kit: Kit, email: EmailConfig | undefined) {
   const { authed, can } = kit;
 
@@ -44,9 +53,9 @@ export function caseMailRoutes(app: FastifyInstance, kit: Kit, email: EmailConfi
       const ct = (await db.query(`SELECT email, do_not_contact FROM contact WHERE id = $1 AND deleted_at IS NULL`, [c.contact_id])).rows[0];
       if (!ct?.email) throw new ApiError(422, 'no_email', 'The contact on this case has no email address.');
       if (ct.do_not_contact) throw new ApiError(422, 'do_not_contact', 'This contact is marked Do Not Contact.');
-      const me = (await db.query(`SELECT display_name FROM app_user WHERE id = $1`, [userId])).rows[0];
+      const me = await senderOf(db, userId);
       const subject = (b.subject ? String(b.subject).trim() : `Re: [Case #${c.case_number}] ${c.subject}`).replace(/[\r\n]+/g, ' ');
-      const full = `${text}\n\n${me.display_name}`;
+      const full = `${text}\n\n${me.sign}`;
       const tenantId = (await db.query(`SELECT current_tenant_id() AS t`)).rows[0].t;
       const m = (await db.query(
         `INSERT INTO email_message (tenant_id, case_id, contact_id, to_email, from_email, subject, body)
@@ -83,5 +92,68 @@ export function caseMailRoutes(app: FastifyInstance, kit: Kit, email: EmailConfi
 
     if ('failed' in out) throw new ApiError(502, 'email_failed', `The email was not sent. ${out.failed}`);
     return reply.status(201).send(out);
+  });
+}
+
+// A conversation with a contact that is not tied to a case: send an email from the contact page, and see every email
+// with that person, including the ones that belong to their cases.
+export function contactMailRoutes(app: FastifyInstance, kit: Kit, email: EmailConfig | undefined) {
+  const { authed, can } = kit;
+
+  app.get('/v1/contacts/:id/emails', async (req) =>
+    authed(req, async (db, userId) => {
+      const { id } = req.params as { id: string };
+      if (!UUID.test(id)) throw new ApiError(404, 'not_found', 'Not found');
+      await can(db, userId, 'contact', 'read');
+      const r = await db.query(
+        `SELECT m.id, m.case_id, c.case_number, m.direction, m.to_email, m.from_email, m.subject, m.body, m.status, m.error, m.sent_at, m.created_at, m.created_by
+           FROM email_message m LEFT JOIN support_case c ON c.id = m.case_id
+          WHERE m.contact_id = $1 AND m.deleted_at IS NULL AND (m.case_id IS NULL OR can_do($2::uuid, 'case', 'read'))
+          ORDER BY m.created_at DESC LIMIT 200`, [id, userId]);
+      return { data: r.rows.map((m) => ({ ...m, body: m.direction === 'in' ? newPartOf(m.body) : m.body })) };
+    }));
+
+  app.post('/v1/contacts/:id/email', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!UUID.test(id)) throw new ApiError(404, 'not_found', 'Not found');
+    const b: any = req.body ?? {};
+    const text = typeof b.body === 'string' ? b.body.trim() : '';
+    if (!text) throw new ApiError(400, 'bad_request', 'Write a message first');
+    if (text.length > 20_000) throw new ApiError(400, 'bad_request', 'That message is too long');
+    if (typeof b.subject !== 'string' || !b.subject.trim() || b.subject.length > 200) throw new ApiError(400, 'bad_request', 'The subject must be 1 to 200 characters');
+
+    const prep = await authed(req, async (db, userId) => {
+      await can(db, userId, 'contact', 'read');
+      await can(db, userId, 'activity', 'create');
+      if (!email) throw new ApiError(503, 'email_not_configured', 'Email is not set up yet. Add RESEND_API_KEY and EMAIL_FROM in Render, then try again.');
+      const ct = (await db.query(`SELECT id, email, do_not_contact FROM contact WHERE id = $1 AND deleted_at IS NULL`, [id])).rows[0];
+      if (!ct) throw new ApiError(404, 'not_found', 'Not found');
+      if (!ct.email) throw new ApiError(422, 'no_email', 'This contact has no email address.');
+      if (ct.do_not_contact) throw new ApiError(422, 'do_not_contact', 'This contact is marked Do Not Contact.');
+      const me = await senderOf(db, userId);
+      const subject = b.subject.trim().replace(/[\r\n]+/g, ' ');
+      const full = `${text}\n\n${me.sign}`;
+      const tenantId = (await db.query(`SELECT current_tenant_id() AS t`)).rows[0].t;
+      const m = (await db.query(
+        `INSERT INTO email_message (tenant_id, contact_id, to_email, from_email, subject, body) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [tenantId, id, ct.email, email.from, subject, full])).rows[0];
+      return { messageId: m.id as string, to: ct.email as string, subject, full };
+    });
+
+    let provider: { id: string } | undefined;
+    let failure: string | undefined;
+    try {
+      provider = await email!.send({ from: email!.from, to: prep.to, subject: prep.subject, text: prep.full,
+        replyTo: email!.contactReplyTo ? email!.contactReplyTo(id) : email!.replyTo });
+    } catch (e) {
+      failure = e instanceof EmailError ? e.message : 'The email could not be sent.';
+      if (!(e instanceof EmailError)) req.log.error(e);
+    }
+    await authed(req, async (db) => {
+      if (failure) await db.query(`UPDATE email_message SET status = 'failed', error = $2 WHERE id = $1`, [prep.messageId, failure.slice(0, 500)]);
+      else await db.query(`UPDATE email_message SET status = 'sent', sent_at = now(), provider_message_id = $2 WHERE id = $1`, [prep.messageId, provider!.id]);
+    });
+    if (failure) throw new ApiError(502, 'email_failed', `The email was not sent. ${failure}`);
+    return reply.status(201).send({ sent_to: prep.to, message_id: prep.messageId });
   });
 }

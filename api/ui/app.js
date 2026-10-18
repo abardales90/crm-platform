@@ -35,7 +35,7 @@ function applyAccent(a) {
   try { localStorage.setItem(ACCENT_KEY, a || 'green'); } catch { /* private window */ }
   updateFavicon();
 }
-let prefs = { accent: null, tour_done_at: null, last_seen_release: null };
+let prefs = { accent: null, tour_done_at: null, last_seen_release: null, email_signature: null };
 async function savePrefs(change) { prefs = await api('PUT', '/me/preferences', change); return prefs; }
 
 // ---------- tiny DOM helper ----------
@@ -778,6 +778,7 @@ async function viewDetail(key, id) {
   if (key === 'contacts') {
     const cases = can('case', 'read') ? await listAll('/cases?contact_id=' + id) : [];
     if (rec.account_id) add(related('Account', h('a', { href: '#/accounts/' + rec.account_id }, cache.accounts.find((a) => a.id === rec.account_id)?.name || 'Open account')));
+    add(await contactEmailPanel(rec));
     if (can('case', 'read')) add(related('Cases', miniTable(cases, [(c) => '#' + c.case_number, (c) => c.subject, (c) => cell(['status', '', 'status'], c)], (c) => '#/cases/' + c.id, 'No cases yet.')));
     if (can('activity', 'read')) add(related('Activity', await activitiesPanel('contact_id', id)));
   }
@@ -790,6 +791,51 @@ async function viewDetail(key, id) {
     if (can('case_comment', 'read')) add(await commentsPanel(rec));
     if (can('activity', 'read')) add(related('Tasks and notes', await activitiesPanel('case_id', id)));
   }
+}
+
+async function contactEmailPanel(rec) {
+  const emails = await api('GET', `/contacts/${rec.id}/emails`).then((r) => r.data).catch(() => []);
+  const emailOn = !!cache.workspace?.email?.configured;
+  let composer = null;
+  if (can('activity', 'create')) {
+    const ok = emailOn && !!rec.email && !rec.do_not_contact;
+    if (ok) {
+      const subject = h('input', { type: 'text', placeholder: 'Subject' });
+      const body = h('textarea', { placeholder: 'Write a message', style: 'margin-top:10px;width:100%' });
+      const send = h('button', { class: 'primary', onclick: async (e) => {
+        if (!subject.value.trim()) return subject.focus();
+        if (!body.value.trim()) return body.focus();
+        e.target.disabled = true;
+        try { await api('POST', `/contacts/${rec.id}/email`, { subject: subject.value.trim(), body: body.value.trim() }); toast('Email sent to ' + rec.email); await viewDetail('contacts', rec.id); }
+        catch (err) { toast(errText(err), true); e.target.disabled = false; }
+      } }, 'Send email');
+      composer = h('div', { style: 'margin-bottom:16px' },
+        h('div', { class: 'inline', style: 'align-items:flex-end;gap:10px' }, h('label', { class: 'f', style: 'flex:1;min-width:220px' }, h('span', {}, 'Send an email to ' + ENT.contacts.title(rec)), subject), send),
+        body, sigPreview());
+    } else {
+      const why = !emailOn ? 'Email is not set up yet. Turn it on in Settings to send from here.' : !rec.email ? 'This contact has no email address.' : 'This contact is marked Do Not Contact.';
+      composer = h('div', { class: 'muted', style: 'margin-bottom:12px' }, why);
+    }
+  }
+  const thread = h('div', { class: 'thread' }, emails.length ? emails.map((m) => {
+    const inbound = m.direction === 'in';
+    const who = inbound ? ENT.contacts.title(rec) + ' wrote in' : (userName(m.created_by) || 'Agent') + ' sent';
+    return h('div', { class: 'msg ' + (inbound ? 'customer' : '') },
+      h('div', { class: 'who' }, h('span', { class: 'pill ok' }, 'Email'), ' ',
+        m.case_id ? h('a', { class: 'pill', href: '#/cases/' + m.case_id }, 'Case #' + m.case_number) : null, m.case_id ? ' ' : null,
+        `${who} · ${fmtDateTime(m.sent_at || m.created_at)}`,
+        m.status === 'failed' ? h('span', { class: 'pill bad', style: 'margin-left:6px', title: m.error || null }, 'Failed') : null),
+      h('div', { style: 'font-weight:600;margin-bottom:2px' }, m.subject),
+      h('div', { class: 'body' }, m.body));
+  }) : h('div', { class: 'muted' }, 'No emails with this person yet.'));
+  return related('Conversation', h('div', {}, composer, thread));
+}
+
+
+// What will go under an email: the person's own signature from Settings, or just their name.
+function sigPreview() {
+  const text = (prefs.email_signature || '').trim() || me.user.display_name;
+  return h('div', { class: 'sigprev muted' }, h('div', { class: 'sigtag' }, 'Your signature, added automatically · ', h('a', { href: '#/settings/general' }, 'Edit in Settings')), h('div', { style: 'white-space:pre-wrap' }, text));
 }
 
 async function commentsPanel(rec) {
@@ -837,9 +883,10 @@ async function commentsPanel(rec) {
     } }, 'Send email');
     const subjectBox = h('label', { class: 'f', style: 'flex:1;min-width:200px' }, h('span', {}, 'Subject'), subject);
     const afterBox = can('case', 'edit') ? h('label', { class: 'f' }, h('span', {}, 'Then set the case to'), after) : null;
+    const sig = sigPreview();
     const sync = () => {
       const em = mode.value === 'email';
-      subjectBox.hidden = !em; if (afterBox) afterBox.hidden = !em;
+      subjectBox.hidden = !em; if (afterBox) afterBox.hidden = !em; sig.hidden = !em;
       send.textContent = em ? 'Send email' : mode.value === 'internal' ? 'Add internal note' : 'Add note';
     };
     mode.addEventListener('change', sync);
@@ -852,7 +899,7 @@ async function commentsPanel(rec) {
     composer = h('div', { style: 'margin-bottom:16px' },
       h('div', { class: 'inline', style: 'align-items:flex-end;gap:10px' },
         h('label', { class: 'f' }, h('span', {}, 'What do you want to do'), mode), subjectBox, afterBox, send),
-      body,
+      body, sig,
       why ? h('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' }, why) : null);
   }
   const emailLog = emails.length ? related('Emails', h('div', { class: 'tablewrap' }, h('table', {}, h('tbody', {}, emails.map((m) => h('tr', {},
@@ -1106,6 +1153,19 @@ async function viewSettings(tabKey) {
   parts.push(card('Welcome tour', h('div', { class: 'inline' },
     h('p', { style: 'margin:0;flex:1;min-width:220px' }, 'A one minute walk through the main parts of Tally. Play it again any time.'),
     h('button', { onclick: () => runTour({ required: false }) }, 'Take the tour'))));
+
+  // email signature (everyone, for their own emails)
+  const sigBox = h('textarea', { rows: 5, maxlength: 1000, placeholder: 'For example:\nAlex Bardales\nVP of Client Support\n214 938 5998', style: 'width:100%' });
+  sigBox.value = prefs.email_signature || '';
+  parts.push(card('Email signature', h('div', {},
+    h('p', { class: 'muted', style: 'margin:0 0 10px' }, 'This goes at the bottom of every email you send from Tally. It is yours alone, and plain text. If you leave it empty, your name is used.'),
+    sigBox,
+    h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: async (e) => {
+      e.target.disabled = true;
+      try { await savePrefs({ email_signature: sigBox.value }); sigBox.value = prefs.email_signature || ''; toast('Signature saved'); }
+      catch (err) { toast(errText(err), true); }
+      e.target.disabled = false;
+    } }, 'Save signature')))));
 
   // workspace
   const nameInput = h('input', { type: 'text', value: ws.name, disabled: !canEditUsers });

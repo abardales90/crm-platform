@@ -291,3 +291,5 @@ h1.titled .ico { color: var(--accent); flex: none; }
 .mapbox { margin-top: 12px; max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
 .mapbox select { max-width: 100%; }
 [hidden] { display: none !important; }
+.sigprev { margin-top:10px; padding:8px 10px; border-left:3px solid var(--line); font-size:13px; }
+.sigprev .sigtag { font-size:11px; margin-bottom:3px; }

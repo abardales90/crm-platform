@@ -2,6 +2,15 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.15', date: '2026-10-17', title: 'Signatures and contact conversations',
+    items: [
+      'Settings, General has a new Email signature box. Everyone edits their own. It is added to the bottom of every email you send, and if it is empty your name is used.',
+      'The email boxes show your signature under the message so you can see what will go out.',
+      'Contacts now have a Conversation section. Send an email from the contact page, and the person\'s replies land there. No new case is opened for those replies.',
+      'The same list also shows every email from that person\'s cases, tagged with the case number you can click.',
+    ],
+  },
+  {
     id: '0.14', date: '2026-10-17', title: 'A clearer case conversation',
     items: [
       'On a case, the box to reply now sits at the top: what you want to do, the subject, what to set the case to, and the send button, with the message box under them.',
