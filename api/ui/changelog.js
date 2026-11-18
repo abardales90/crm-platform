@@ -2,6 +2,18 @@
 // To add one: put a new entry at the top with a new id. Everyone sees it once as a pop up, and it stays in Settings, Change log.
 export const RELEASES = [
   {
+    id: '0.16', date: '2026-11-18', title: 'Knowledge base, step one',
+    items: [
+      'There is a new Knowledge tab in the left menu. Write articles of three kinds: How to, Troubleshooting and FAQ. Each starts from a simple template, and there is a Preview button to see how it will look.',
+      'Every article is either for customers or for your team only. Team only articles are never shown outside Tally.',
+      'Articles go through review. You write a draft and send it for review, and a lead or admin approves it. A second person approves, unless an admin does it. Edits to a live article stay hidden until they are approved too.',
+      'Settings for the public help center are under Knowledge, Help center. Turn it on and pick a web address name, and customers get a page with search at /help/your-name.',
+      'Your own website can read the same articles from an open data feed. Look under Help center for the address.',
+      'Each article counts how many times it was read and how many people said it helped.',
+      'Backups now include the knowledge base. AI drafting, smart tagging and meaning search come in the next steps.',
+    ],
+  },
+  {
     id: '0.15', date: '2026-10-17', title: 'Signatures and contact conversations',
     items: [
       'Settings, General has a new Email signature box. Everyone edits their own. It is added to the bottom of every email you send, and if it is empty your name is used.',

@@ -1837,6 +1837,7 @@ async function viewTasks() {
 
 // ---------- icons: a small set drawn for Tally, one for each kind of record ----------
 const ICONS = {
+  book: [['path', { d: 'M5 4.5h10.5A2.5 2.5 0 0 1 18 7v12.5H7.5A2.5 2.5 0 0 1 5 17V4.5z' }], ['path', { d: 'M5 17a2.5 2.5 0 0 1 2.5-2.5H18' }], ['path', { d: 'M9 8.5h5' }]],
   home: [['path', { d: 'M4 11l8-7 8 7' }], ['path', { d: 'M6 10v9a1 1 0 0 0 1 1h3.5v-5h3v5H17a1 1 0 0 0 1-1v-9' }]],
   tasks: [['rect', { x: 4, y: 4, width: 16, height: 16, rx: 4 }], ['path', { d: 'M8.5 12.5l2.5 2.5 4.5-5.5' }]],
   accounts: [['path', { d: 'M5 20V6a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v14' }], ['path', { d: 'M15 10h3a1 1 0 0 1 1 1v9' }], ['path', { d: 'M3 20h18' }], ['path', { d: 'M8.5 9h3M8.5 12.5h3M8.5 16h3' }]],
@@ -1874,6 +1875,7 @@ const NAV = [
   { key: 'contacts', href: '#/contacts', label: 'Contacts', icon: 'contacts', show: () => can('contact', 'read') },
   { key: 'deals', href: '#/deals', label: 'Deals', icon: 'deals', show: () => can('opportunity', 'read') },
   { key: 'cases', href: '#/cases', label: 'Cases', icon: 'cases', show: () => can('case', 'read') },
+  { key: 'knowledge', href: '#/knowledge', label: 'Knowledge', icon: 'book', show: () => can('case', 'read') },
   { key: 'reports', href: '#/reports', label: 'Reports', icon: 'reports', show: () => can('case', 'read') || can('opportunity', 'read') || can('account', 'read') },
 ];
 function navOrdered() {
@@ -2106,6 +2108,7 @@ async function route() {
     else if (section === 'reports') await viewReports(id);
     else if (section === 'settings') await viewSettings(id);
     else if (section === 'tasks') await viewTasks();
+    else if (section === 'knowledge') await viewKnowledge(id);
     else if (section === 'search') await viewSearch(id);
     else if (section === 'deals' && !id) await viewDeals();
     else if (ENT[section] && !id) await viewList(section);
@@ -2134,3 +2137,149 @@ const backError = new URLSearchParams(location.search).get('login_error');
 if (back) { token = back[1]; try { localStorage.setItem(TOKEN_KEY, token); } catch { /* private window: signed in until reload */ } }
 if (back || backError) history.replaceState(null, '', location.pathname);
 if (token) boot().catch(() => renderLogin()); else renderLogin(backError ? (LOGIN_ERRORS[backError] || LOGIN_ERRORS.failed) : undefined);
+
+// ---------- knowledge base ----------
+const KB_TYPES = [['how_to', 'How to'], ['troubleshooting', 'Troubleshooting'], ['faq', 'FAQ']];
+const KB_AUD = [['public', 'Customers (public)'], ['internal', 'Our team only']];
+const KB_STATUS = { draft: ['Draft', ''], in_review: ['In review', 'warn'], published: ['Published', 'ok'], archived: ['Archived', ''] };
+const KB_TEMPLATES = {
+  how_to: '## Before you start\n\n- \n\n## Steps\n\n1. \n2. \n3. \n\n## Check that it worked\n\n',
+  troubleshooting: '## What you see\n\n\n## Why it happens\n\n\n## How to fix it\n\n1. \n2. \n\n## Still stuck?\n\nReply to us and we will help.\n',
+  faq: 'Write the answer in a few short paragraphs. Start with the direct answer.\n',
+};
+const kbLabel = (list, v) => (list.find((x) => x[0] === v) || [v, v])[1];
+const kbStatus = (s) => h('span', { class: 'pill ' + (KB_STATUS[s]?.[1] || '') }, KB_STATUS[s]?.[0] || s);
+const kbCanWrite = () => can('case', 'edit');
+const kbCanApprove = () => can('case', 'delete');
+let kbSite;
+async function kbLoadSite() { kbSite = (await api('GET', '/kb/site')).data; return kbSite; }
+
+async function viewKnowledge(sub) {
+  await kbLoadSite();
+  if (sub && !['review', 'settings'].includes(sub)) return viewArticle(sub);
+  const tabs = [['', 'Articles'], ['review', 'Review queue'], ...(can('app_user', 'edit') ? [['settings', 'Help center']] : [])];
+  const tab = sub || '';
+  const parts = [h('div', { class: 'head' }, titled('book', 'Knowledge'),
+      h('div', { class: 'tools' }, kbCanWrite() ? h('button', { class: 'primary', onclick: () => newArticle() }, 'New article') : null)),
+    h('div', { class: 'tabs' }, tabs.map((t) => h('a', { class: 'tab' + (t[0] === tab ? ' on' : ''), href: '#/knowledge' + (t[0] ? '/' + t[0] : '') }, t[1])))];
+  if (tab === 'settings') { parts.push(...await kbSettings()); return setView(parts); }
+  const rows = (await api('GET', '/kb/articles' + (tab === 'review' ? '?status=in_review' : '?limit=200'))).data;
+  const box = h('div', {});
+  const f = { q: '', status: '', type: '', audience: '' };
+  const draw = () => {
+    const list = rows.filter((r) => (!f.status || r.status === f.status) && (!f.type || r.type === f.type) && (!f.audience || r.audience === f.audience)
+      && (!f.q || (r.title + ' ' + (r.summary || '') + ' ' + r.tags.join(' ')).toLowerCase().includes(f.q.toLowerCase())));
+    fill(box, list.length ? h('div', { class: 'card tablewrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Title', 'Type', 'Who sees it', 'Status', 'Owner', 'Updated', 'Reads'].map((x) => h('th', {}, x)))),
+      h('tbody', {}, list.map((r) => h('tr', { class: 'row', onclick: () => { location.hash = '#/knowledge/' + r.id; } },
+        h('td', {}, h('strong', {}, r.title), r.ai_drafted ? h('span', { class: 'pill', style: 'margin-left:6px' }, 'AI draft') : null),
+        h('td', {}, kbLabel(KB_TYPES, r.type)), h('td', {}, r.audience === 'public' ? 'Customers' : 'Team only'),
+        h('td', {}, kbStatus(r.status)), h('td', {}, r.owner_name || ''), h('td', {}, fmtDateTime(r.updated_at)), h('td', {}, r.views))))))
+      : h('div', { class: 'card empty' }, tab === 'review' ? 'Nothing is waiting for review.' : rows.length ? 'No articles match.' : 'No articles yet. Click New article to write the first one.'));
+  };
+  if (tab === '') {
+    const q = h('input', { type: 'search', placeholder: 'Search articles', 'aria-label': 'Search articles', oninput: (e) => { f.q = e.target.value; draw(); } });
+    const sel = (k, opts, label) => { const s = selectOf(opts, '', {}); s.setAttribute('aria-label', label); s.firstChild.textContent = label; s.onchange = () => { f[k] = s.value; draw(); }; return s; };
+    parts.push(h('div', { class: 'grid2', style: 'margin-bottom:12px' }, q, sel('status', Object.entries(KB_STATUS).map(([k, v]) => [k, v[0]]), 'Any status'),
+      sel('type', KB_TYPES, 'Any type'), sel('audience', KB_AUD, 'Anyone')));
+  }
+  parts.push(box); draw();
+  setView(parts);
+}
+
+function newArticle() {
+  const title = h('input', { type: 'text', maxlength: 200, placeholder: 'For example: How to reset your password' });
+  const type = selectOf(KB_TYPES, 'how_to', { blank: false });
+  const aud = selectOf(KB_AUD, 'public', { blank: false });
+  modal('New article', h('div', { class: 'grid2' },
+    h('label', { class: 'f wide' }, 'Title', title), h('label', { class: 'f' }, 'Type', type), h('label', { class: 'f' }, 'Who can read it', aud)),
+    [{ label: 'Cancel' }, { label: 'Create draft', primary: true, run: async (dlg) => {
+      if (!title.value.trim()) throw new Error('Give the article a title');
+      const r = await api('POST', '/kb/articles', { title: title.value.trim(), type: type.value, audience: aud.value, body: KB_TEMPLATES[type.value] });
+      dlg.close(); location.hash = '#/knowledge/' + r.data.id;
+    } }]);
+}
+
+async function viewArticle(id) {
+  const [{ data: a }, cats] = await Promise.all([api('GET', '/kb/articles/' + id), api('GET', '/kb/categories')]);
+  const editable = kbCanWrite() && !['in_review', 'archived'].includes(a.status);
+  const title = h('input', { type: 'text', value: a.title, maxlength: 200, disabled: !editable });
+  const type = selectOf(KB_TYPES, a.type, { blank: false }); type.disabled = !editable;
+  const aud = selectOf(KB_AUD, a.audience, { blank: false }); aud.disabled = !editable;
+  const cat = selectOf(cats.data.map((c) => [c.id, c.name]), a.category_id || ''); cat.disabled = !editable;
+  const tags = h('input', { type: 'text', value: (a.tags || []).join(', '), placeholder: 'password, login, account', disabled: !editable });
+  const summary = h('textarea', { maxlength: 400, style: 'min-height:56px', disabled: !editable }, a.summary || '');
+  const body = h('textarea', { class: 'kbbody', spellcheck: 'true', disabled: !editable }, a.body);
+  const preview = h('div', { class: 'kbpreview', hidden: true });
+  const wbtn = h('button', { class: 'small primary', type: 'button' }, 'Write'), pbtn = h('button', { class: 'small', type: 'button' }, 'Preview');
+  wbtn.onclick = () => { body.hidden = false; preview.hidden = true; wbtn.classList.add('primary'); pbtn.classList.remove('primary'); };
+  pbtn.onclick = async () => {
+    try { preview.innerHTML = (await api('POST', '/kb/preview', { body: body.value })).html || '<p class="muted">Nothing to show yet.</p>'; } catch (e) { return toast(errText(e), true); }
+    body.hidden = true; preview.hidden = false; pbtn.classList.add('primary'); wbtn.classList.remove('primary');
+  };
+  const mine = () => ({ title: title.value.trim(), type: type.value, audience: aud.value, category_id: cat.value || null,
+    tags: tags.value.split(',').map((x) => x.trim()).filter(Boolean), summary: summary.value.trim() || null, body: body.value, version: a.version });
+  const act = async (fn, msg) => { try { await fn(); toast(msg); await route(); } catch (e) { toast(errText(e), true); } };
+  const save = async () => { await api('PATCH', '/kb/articles/' + a.id, mine()); };
+  const url = kbSite?.enabled && a.published_version_id && a.audience === 'public' && a.status !== 'archived' ? `/help/${kbSite.slug}/${a.slug}` : null;
+  const buttons = [];
+  if (editable) {
+    buttons.push(h('button', { onclick: () => act(save, 'Saved') }, 'Save'));
+    buttons.push(h('button', { class: 'primary', onclick: () => act(async () => { await save(); await api('POST', `/kb/articles/${a.id}/submit`); }, 'Sent for review') }, 'Save and send for review'));
+  }
+  if (a.status === 'in_review' && kbCanApprove()) {
+    buttons.push(h('button', { class: 'primary', onclick: () => modal('Approve and publish', h('label', { class: 'f' }, 'What changed? (optional)', h('input', { id: 'kbnote', type: 'text', maxlength: 500 })),
+      [{ label: 'Cancel' }, { label: 'Approve and publish', primary: true, run: async (dlg) => { await api('POST', `/kb/articles/${a.id}/approve`, { change_note: $('#kbnote', dlg).value.trim() || null }); dlg.close(); toast('Published'); await route(); } }]) }, 'Approve and publish'));
+    buttons.push(h('button', { onclick: () => modal('Send back', h('label', { class: 'f' }, 'What needs to change?', h('textarea', { id: 'kbnote' })),
+      [{ label: 'Cancel' }, { label: 'Send back', primary: true, run: async (dlg) => { await api('POST', `/kb/articles/${a.id}/reject`, { note: $('#kbnote', dlg).value.trim() }); dlg.close(); toast('Sent back'); await route(); } }]) }, 'Send back'));
+  }
+  if (a.status !== 'archived' && kbCanApprove()) buttons.push(h('button', { onclick: () => act(() => api('POST', `/kb/articles/${a.id}/archive`), 'Archived. It is no longer on the help center.') }, 'Archive'));
+  if (a.status === 'archived' && kbCanApprove()) buttons.push(h('button', { onclick: () => act(() => api('POST', `/kb/articles/${a.id}/restore`), 'Restored as a draft') }, 'Restore'));
+  const notes = [];
+  if (a.review_note) notes.push(h('div', { class: 'banner' }, h('strong', {}, 'Sent back: '), a.review_note));
+  if (a.status === 'in_review') notes.push(h('div', { class: 'banner' }, kbCanApprove() ? 'This article is waiting for you to approve it. A second person should approve articles they did not edit.' : 'This article is waiting for a reviewer. You can edit again if they send it back.'));
+  if (a.status === 'draft' && a.published_version_id) notes.push(h('div', { class: 'banner' }, 'You are editing a live article. Customers still see the approved version until this change is approved.'));
+  setView(
+    h('div', { class: 'head' }, h('div', {}, h('a', { href: '#/knowledge' }, 'Knowledge'), h('h1', { style: 'margin:4px 0 0' }, a.title)),
+      h('div', { class: 'tools' }, kbStatus(a.status), url ? h('a', { class: 'button', href: url, target: '_blank', rel: 'noopener' }, 'View live page') : null)),
+    notes,
+    h('div', { class: 'card' }, h('div', { class: 'grid2' },
+      h('label', { class: 'f wide' }, 'Title', title), h('label', { class: 'f' }, 'Type', type), h('label', { class: 'f' }, 'Who can read it', aud),
+      h('label', { class: 'f' }, 'Category', cat), h('label', { class: 'f' }, 'Tags', h('span', { class: 'hint' }, 'Separate with commas'), tags),
+      h('label', { class: 'f wide' }, 'Short summary', h('span', { class: 'hint' }, 'Shown in the list and in search results'), summary))),
+    h('div', { class: 'card' }, h('div', { class: 'sectionhead' }, h('h2', {}, 'Article'), h('div', { class: 'tools' }, wbtn, pbtn)),
+      body, preview, h('p', { class: 'muted', style: 'margin:8px 0 0' }, 'Formatting: ## Heading, **bold**, *italic*, - bullet, 1. numbered, [link text](https://example.com)')),
+    h('div', { class: 'row-actions', style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px' }, buttons),
+    a.history?.length ? card('Published versions', h('div', {}, a.history.map((v) => h('div', { class: 'muted' }, `Version ${v.version_no} · ${fmtDateTime(v.published_at)}${v.change_note ? ' · ' + v.change_note : ''}`)))) : null);
+}
+
+async function kbSettings() {
+  const cats = (await api('GET', '/kb/categories')).data;
+  const s = kbSite || { slug: '', enabled: false, title: '', tagline: '', accent: '' };
+  const enabled = h('input', { type: 'checkbox', checked: !!s.enabled });
+  const slug = h('input', { type: 'text', value: s.slug, maxlength: 63, placeholder: 'your-company' });
+  const title = h('input', { type: 'text', value: s.title, maxlength: 80, placeholder: 'Acme Help Center' });
+  const tagline = h('input', { type: 'text', value: s.tagline || '', maxlength: 160, placeholder: 'Answers to common questions' });
+  const accent = h('input', { type: 'text', value: s.accent || '', maxlength: 7, placeholder: '#2457c5' });
+  const origin = location.origin;
+  const links = s.slug ? h('div', { class: 'muted', style: 'margin-top:10px;line-height:1.8' },
+    h('div', {}, 'Help center page: ', h('a', { href: `${origin}/help/${s.slug}`, target: '_blank', rel: 'noopener' }, `${origin}/help/${s.slug}`)),
+    h('div', {}, 'Open data feed (for your own website): ', h('code', {}, `${origin}/public/v1/kb/${s.slug}/articles`))) : null;
+  const siteCard = card('Public help center', h('div', {},
+    h('p', { class: 'muted', style: 'margin-top:0' }, 'Customers see only articles marked for customers that a reviewer has approved. Turn this on when you are ready.'),
+    h('div', { class: 'grid2' },
+      h('label', { class: 'f' }, 'Web address name', h('span', { class: 'hint' }, 'Letters, numbers and dashes'), slug),
+      h('label', { class: 'f' }, 'Help center title', title), h('label', { class: 'f' }, 'Tagline (optional)', tagline),
+      h('label', { class: 'f' }, 'Accent color (optional)', accent)),
+    h('label', { class: 'radio', style: 'margin:12px 0' }, enabled, 'Help center is on'),
+    h('button', { class: 'primary', onclick: async () => {
+      try { await api('PUT', '/kb/site', { slug: slug.value.trim(), title: title.value.trim(), tagline: tagline.value.trim() || null, accent: accent.value.trim() || null, enabled: enabled.checked }); toast('Saved'); await route(); }
+      catch (e) { toast(errText(e), true); }
+    } }, 'Save'), links));
+  const name = h('input', { type: 'text', maxlength: 60, placeholder: 'New category, for example Getting started' });
+  const catCard = card('Categories', h('div', {},
+    cats.length ? cats.map((c) => h('div', { class: 'menurow' }, h('span', { class: 'grow' }, c.name), h('span', { class: 'muted' }, `${c.articles} article${c.articles === 1 ? '' : 's'}`),
+      h('button', { class: 'small', onclick: () => act2(() => api('PATCH', '/kb/categories/' + c.id, { deleted: true }), 'Removed') }, 'Remove'))) : h('p', { class: 'muted' }, 'No categories yet.'),
+    kbCanApprove() ? h('div', { style: 'display:flex;gap:8px;margin-top:10px' }, name, h('button', { onclick: () => act2(() => api('POST', '/kb/categories', { name: name.value.trim() }), 'Added') }, 'Add')) : null));
+  async function act2(fn, msg) { try { await fn(); toast(msg); await route(); } catch (e) { toast(errText(e), true); } }
+  return [siteCard, catCard];
+}

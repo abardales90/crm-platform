@@ -129,3 +129,13 @@ Only people already listed under Settings, People can sign in. Google proves who
 ## Version 0.11
 
 - Import has a value translation step: values in a column that the target field does not accept (stages, status, priority, pick lists, owners, queues) are listed with row counts, and each can be translated or left blank. Near matches (ignoring case and punctuation) are pre filled. Choices are kept in the browser (`localStorage`, per record type).
+
+## Version 0.16
+
+- Knowledge base, step one. Tables kb_site, kb_category, kb_article, kb_article_version and kb_stat (migration 0017), all separate per company with row security.
+- Articles are drafts that go through review (draft, in review, published, archived). Approval freezes a copy in kb_article_version, and the public pages only ever read that frozen copy, so edits stay hidden until approved. The last editor cannot approve unless they are an admin.
+- Permissions borrow from existing ones: read = read cases, write = edit cases, approve and categories = delete cases (leads and admins), help center settings = edit users (admins).
+- Authenticated routes under `/v1/kb/` (site, categories, articles, submit, approve, reject, archive, restore, preview).
+- Public, no sign in, rate limited: `/help/:slug` and `/help/:slug/:article` (hosted pages), and the open feed `/public/v1/kb/:slug`, `/articles`, `/articles/:article`, plus a helpful vote. Only a company whose help center is switched on is visible; internal articles can never appear.
+- Article text is Markdown. It is escaped before it is rendered, so it cannot add scripts.
+- Next steps: 0.17 company AI key, AI tags and drafts from solved cases; 0.18 meaning search (pgvector), article suggestions in case replies and tracking which articles solve cases; 0.19 embed widget and signed push on publish.

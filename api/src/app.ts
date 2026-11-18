@@ -16,6 +16,8 @@ import { searchRoutes } from './search.js';
 import { customFieldRoutes, cleanCustom } from './customfields.js';
 import { viewRoutes } from './views.js';
 import { backupRoutes } from './backup.js';
+import { knowledgeRoutes } from './knowledge.js';
+import { kbPublicRoutes } from './kbpublic.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const q = (c: string) => `"${c}"`; // column names only ever come from the schema whitelist
@@ -165,6 +167,8 @@ export function buildApp(opts: {
   customFieldRoutes(app, kit);
   viewRoutes(app, kit);
   backupRoutes(app, kit);
+  knowledgeRoutes(app, kit);
+  kbPublicRoutes(app);
 
   for (const res of resources) {
     const base = `/v1/${res.path}`;

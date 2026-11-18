@@ -45,3 +45,21 @@ export async function withTenant<T>(ctx: Ctx, fn: (db: Db) => Promise<T>): Promi
     db.release();
   }
 }
+
+// For the few public pages that have no signed in user. No tenant is set, so row security only lets a query see
+// things the database marks as public (a help center that has been switched on). Use withTenant for anything else.
+export async function withoutTenant<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+  if (!pool) throw new Error('database pool not initialised');
+  const db = await pool.connect();
+  try {
+    await db.query('BEGIN');
+    const out = await fn(db);
+    await db.query('COMMIT');
+    return out;
+  } catch (e) {
+    await db.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    db.release();
+  }
+}

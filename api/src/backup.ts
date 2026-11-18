@@ -8,10 +8,11 @@ export const BACKUP_TABLES = [
   'pipeline_stage', 'queue', 'sla_policy', 'custom_field',
   'account', 'contact', 'opportunity', 'support_case', 'case_comment', 'activity', 'email_message',
   'external_id', 'saved_view', 'user_preference',
+  'kb_site', 'kb_category', 'kb_article', 'kb_article_version', 'kb_stat',
 ] as const;
 
 // These join tables have no id column of their own.
-const NO_ID = new Set<string>(['user_role', 'role_permission', 'field_permission']);
+const NO_ID = new Set<string>(['user_role', 'role_permission', 'field_permission', 'kb_site', 'kb_stat']);
 
 export function backupRoutes(app: FastifyInstance, { authed, can }: Kit) {
   // One file with everything in this workspace. Admins only. Includes records that were deleted, so nothing is lost.
@@ -22,7 +23,8 @@ export function backupRoutes(app: FastifyInstance, { authed, can }: Kit) {
       const tables: Record<string, unknown[]> = {};
       const counts: Record<string, number> = {};
       for (const name of BACKUP_TABLES) {
-        const r = await db.query(`SELECT * FROM "${name}" ORDER BY ${NO_ID.has(name) ? '1, 2, 3' : 'id'}`);
+        // kb_site can be read across companies when a help center is public, so it is always narrowed to this company.
+        const r = await db.query(`SELECT * FROM "${name}" ${name === 'kb_site' ? 'WHERE tenant_id = current_tenant_id() ' : ''}ORDER BY ${NO_ID.has(name) ? '1, 2, 3' : 'id'}`);
         tables[name] = r.rows;
         counts[name] = r.rowCount ?? 0;
       }
